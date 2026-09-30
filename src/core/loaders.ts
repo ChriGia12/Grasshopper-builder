@@ -242,3 +242,63 @@ export function partSize(p: ModelPart): [number, number, number] {
   const b = computeBounds(p.mesh);
   return [b.max[0] - b.min[0], b.max[1] - b.min[1], b.max[2] - b.min[2]];
 }
+
+const TYPE_PRIORITY: Record<string, number> = { Mesh: 0, Polisuperficie: 1, BREP: 1, Estrusione: 2, 'SubD (rete controllo)': 3 };
+
+export interface CellRegion {
+  /** BASE origin in world coordinates (worldBaseX/Y/Z). */
+  worldBase: [number, number, number];
+  bedCenter: [number, number];
+  bedSize: [number, number];
+}
+
+type Box = ReturnType<typeof computeBounds>;
+const volume = (b: Box) => (b.max[0] - b.min[0]) * (b.max[1] - b.min[1]) * (b.max[2] - b.min[2]);
+
+/** One object per group of objects occupying the same box (same piece saved as mesh, BREP, SubD…), preferring meshes. */
+function dedupe(items: { p: ModelPart; b: Box }[]): { parts: ModelPart[]; b: Box }[] {
+  const groups: { b: Box; items: ModelPart[] }[] = [];
+  for (const { p, b } of items) {
+    const tol = 0.05 * Math.max(b.max[0] - b.min[0], b.max[1] - b.min[1], b.max[2] - b.min[2]);
+    const g = groups.find((g) => [0, 1, 2].every((k) => Math.abs(g.b.min[k] - b.min[k]) <= tol && Math.abs(g.b.max[k] - b.max[k]) <= tol));
+    if (g) g.items.push(p);
+    else groups.push({ b, items: [p] });
+  }
+  return groups.map((g) => ({
+    b: g.b,
+    parts: [g.items.sort((a, c) => (TYPE_PRIORITY[a.type] ?? 9) - (TYPE_PRIORITY[c.type] ?? 9) || c.mesh.indices.length - a.mesh.indices.length)[0]],
+  }));
+}
+
+/**
+ * The robot cell is fixed, so a Rhino file may be the whole scene (robot, table, fixtures…).
+ * The piece is what stands on the work table: keep objects whose box lies inside the table
+ * area (world → BASE) and rests near its surface; drop duplicates and small leftovers.
+ * Files with a few objects (a piece or a set of pieces) are taken as they are.
+ */
+export function pickPieces(model: LoadedModel, cell: CellRegion): { parts: ModelPart[]; note: string | null } {
+  if (model.parts.length <= 5) {
+    const g = dedupe(model.parts.map((p) => ({ p, b: computeBounds(p.mesh) })));
+    return { parts: g.flatMap((x) => x.parts), note: null };
+  }
+  const [wx, wy, wz] = cell.worldBase;
+  const margin = 0.1;
+  const x0 = cell.bedCenter[0] - (cell.bedSize[0] / 2) * (1 + margin) + wx;
+  const x1 = cell.bedCenter[0] + (cell.bedSize[0] / 2) * (1 + margin) + wx;
+  const y0 = cell.bedCenter[1] - (cell.bedSize[1] / 2) * (1 + margin) + wy;
+  const y1 = cell.bedCenter[1] + (cell.bedSize[1] / 2) * (1 + margin) + wy;
+  const onTable = model.parts
+    .map((p) => ({ p, b: computeBounds(p.mesh) }))
+    .filter(({ b }) => b.min[0] >= x0 && b.max[0] <= x1 && b.min[1] >= y0 && b.max[1] <= y1 && b.min[2] >= wz - 20 && b.min[2] <= wz + 150);
+  const groups = dedupe(onTable).sort((a, b) => volume(b.b) - volume(a.b));
+  if (!groups.length)
+    return {
+      parts: [],
+      note: `Il file contiene ${model.parts.length} oggetti ma nessuno sul piano di lavoro: esporta da Rhino solo il pezzo (Esporta selezionati) e ricaricalo.`,
+    };
+  // Main piece = biggest; other pieces on the table at least 30% of its volume are kept too.
+  const keep = groups.filter((g) => volume(g.b) >= 0.3 * volume(groups[0].b));
+  const parts = keep.flatMap((g) => g.parts);
+  const names = parts.map((p) => `${p.type}${p.name ? ' ' + p.name : ''} (layer "${p.layer}")`).join(', ');
+  return { parts, note: `Scena Rhino con ${model.parts.length} oggetti: usato solo ciò che sta sul piano → ${names}.` };
+}

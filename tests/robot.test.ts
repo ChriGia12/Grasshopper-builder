@@ -30,3 +30,26 @@ describe('robot frames', () => {
     expect(rep.maxRadius).toBeGreaterThan(3000);
   });
 });
+
+import { runBuild } from '../src/core/pipeline';
+import { IDENTITY, weld } from '../src/core/mesh';
+import { DEFAULT_PRINT } from '../src/core/settings';
+import { box } from './fixtures';
+
+describe('placement and start point', () => {
+  const part = weld(box(100, 60, 6));
+  it('starts at the contour point nearest the requested BASE point', () => {
+    const robot = { ...DEFAULT_ROBOT, placement: 'origin' as const, originX: 0, originY: 500, originZ: 0 };
+    const r = runBuild(part, [...IDENTITY] as never, { ...DEFAULT_PRINT, layerHeight: 3, startMode: 'point', startX: 50, startY: 540 }, robot, 't');
+    const p = r.toolpath.points[0];
+    // back-right corner of a 100×60 box centred at (0,500)
+    expect(p.x + r.offset[0]).toBeCloseTo(50, 3);
+    expect(p.y + r.offset[1]).toBeCloseTo(530, 3);
+  });
+  it('rotates the part on the bed', () => {
+    const robot = { ...DEFAULT_ROBOT, placement: 'origin' as const, rotationZ: 90 };
+    const r = runBuild(part, [...IDENTITY] as never, { ...DEFAULT_PRINT, layerHeight: 3 }, robot, 't');
+    expect(r.max[0] - r.min[0]).toBeCloseTo(60, 1);
+    expect(r.max[1] - r.min[1]).toBeCloseTo(100, 1);
+  });
+});

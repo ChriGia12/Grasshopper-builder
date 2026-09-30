@@ -9,12 +9,27 @@ Sito web che sostituisce la catena Rhino/Grasshopper per la **stampa 3D robotica
 
 Tutto gira nel browser (TypeScript + Three.js + WebAssembly): il modello non viene caricato su nessun server.
 
+## Uso rapido
+
+1. **Carica il pezzo** (o più pezzi insieme: selezione multipla, trascinamento, "+ Aggiungi file"). Il robot KR16 e il piano di lavoro sono già nella cella: non vanno caricati.
+   Se carichi un `.3dm` con tutta la scena, il sito usa solo ciò che sta sul piano di lavoro (le coordinate mondo vengono convertite nel sistema BASE) e scarta cella, robot, duplicati.
+2. Il sito sceglie orientamento e modo di stampa.
+3. **Posiziona pezzo**: clicca sul piano nell'anteprima per spostare il centro del pezzo; la rotazione sul piano è in *Robot KUKA e piano → Rotazione pezzo Z*.
+4. **Punto iniziale**: clicca vicino al contorno dove vuoi che parta la stampa (punto azzurro).
+5. **Scarica .src**.
+
+### Chat con Claude
+
+Il pulsante *Chat con Claude* apre una chat che modifica il progetto a parole ("inizia dall'angolo più vicino al robot", "sposta il pezzo 100 mm a sinistra", "strato da 2 mm", "stampalo capovolto"). Claude usa strumenti che leggono lo stato, cambiano le impostazioni, scelgono l'orientamento o ruotano il pezzo; dopo ogni modifica il percorso viene ricalcolato e Claude controlla il risultato (avvisi, sbraccio).
+
+Serve una **chiave API Anthropic** (console.anthropic.com): resta solo nel browser e viene inviata solo ad Anthropic; ogni messaggio consuma crediti API. Modello: Claude Opus 5.5, con fallback automatico lato server in caso di rifiuto.
+
 ## Formati supportati
 
 | Formato | Come viene letto |
 |---|---|
 | STL, OBJ, PLY | loader Three.js (unità assunte in mm) |
-| 3DM (Rhino) | rhino3dm: mesh, polisuperfici ed estrusioni (usa le mesh di render salvate nel file), SubD. Unità convertite in mm. Oggetti raggruppati per layer, con selezione "solo" per scegliere il pezzo dentro una scena intera (cella robot, piano…) |
+| 3DM (Rhino) | rhino3dm: mesh, polisuperfici ed estrusioni (usa le mesh di render salvate nel file), SubD. Unità convertite in mm |
 | STEP, IGES, BREP | OpenCascade (occt-import-js), tassellazione 0,1 mm |
 
 > Polisuperfici `.3dm` senza mesh di render (file salvati con "Salva piccolo") non sono leggibili: apri il file in Rhino in vista ombreggiata e risalva, oppure esporta STEP.
@@ -70,6 +85,8 @@ src/core/toolpath.ts     percorso spirale/planare, spostamenti
 src/core/kuka.ts         writer KRL .src
 src/core/pipeline.ts     orientamento → percorso → .src
 src/worker.ts            calcolo in Web Worker
-src/viewer.ts            anteprima 3D
+src/viewer.ts            anteprima 3D, clic su piano
+src/chat.ts              chat con Claude (tool use)
+src/core/robot.ts        frame KUKA, flangia, sbraccio
 src/main.ts              interfaccia
 ```

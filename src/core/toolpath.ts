@@ -90,7 +90,13 @@ export function resolveMode(summary: LayerSummary, s: PrintSettings): 'spiral' |
   return summary.singleLoop && s.walls === 1 ? 'spiral' : 'planar';
 }
 
-export function buildToolpath(mesh: MeshData, s: PrintSettings, summary = sliceForPrint(mesh, s)): Toolpath {
+export function buildToolpath(
+  mesh: MeshData,
+  s: PrintSettings,
+  summary = sliceForPrint(mesh, s),
+  /** Seam target in the mesh's own frame; defaults to the front-left corner. */
+  startTarget?: Vec2,
+): Toolpath {
   const mode = resolveMode(summary, s);
   const warnings: string[] = [];
   if (s.mode === 'spiral' && mode !== 'spiral')
@@ -100,7 +106,7 @@ export function buildToolpath(mesh: MeshData, s: PrintSettings, summary = sliceF
   if (summary.emptyLayers) warnings.push(`${summary.emptyLayers} strati vuoti.`);
 
   const b = computeBounds(mesh);
-  const start: Vec2 = [b.min[0], b.min[1]];
+  const start: Vec2 = startTarget ?? [b.min[0], b.min[1]];
   const tp: Toolpath = {
     points: [],
     mode,

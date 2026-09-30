@@ -1,13 +1,14 @@
 import './style.css';
-import { ACCEPTED, combineParts, loadModel, partSize, type LoadedModel, type ModelPart } from './core/loaders';
+import { ACCEPTED, combineParts, loadModel, pickPieces, type CellRegion } from './core/loaders';
 import { sanitizeProgramName } from './core/kuka';
-import { IDENTITY, computeBounds, dropToOrigin, meshStats, mulMat3, rotX, rotY, rotZ, type Mat3, type MeshData } from './core/mesh';
+import { IDENTITY, dropToOrigin, mergeMeshes, orientOutward, translate, weld, meshStats, mulMat3, rotX, rotY, rotZ, type Mat3, type MeshData } from './core/mesh';
 import type { OrientationCandidate } from './core/orientation';
 import { placementOffset } from './core/pipeline';
 import { robotRootInBase, type ReachReport } from './core/robot';
 import { DEFAULT_PRINT, DEFAULT_ROBOT, type PrintSettings, type RobotSettings } from './core/settings';
 import type { Toolpath } from './core/toolpath';
 import { Viewer } from './viewer';
+import { mountChat } from './chat';
 import type { WorkerRequest } from './worker';
 
 // ---------- state ----------
@@ -31,10 +32,7 @@ const save = (key: string, v: unknown) => {
 const print: PrintSettings = load('gb.print', DEFAULT_PRINT);
 const robot: RobotSettings = load('gb.robot', DEFAULT_ROBOT);
 
-let model: LoadedModel | null = null;
 let sourceName = '';
-let selected = new Set<number>();
-let duplicates = new Set<number>();
 let mesh: MeshData | null = null;
 let orientations: OrientationCandidate[] = [];
 let orientIdx = 0;
@@ -100,14 +98,36 @@ async function busy<T>(text: string, fn: () => Promise<T>): Promise<T> {
   }
 }
 
-// ---------- step 1: model ----------
+// ---------- step 1: pieces ----------
+// The robot cell is fixed; the user only brings the piece(s). Each file becomes one piece
+// (a whole Rhino scene is reduced to what stands on the work table).
+
+interface Piece {
+  id: number;
+  file: string;
+  label: string;
+  format: string;
+  mesh: MeshData;
+}
+
+let pieces: Piece[] = [];
+let pieceNotes: string[] = [];
+let nextPieceId = 1;
 
 const fileInput = $<HTMLInputElement>('file');
 fileInput.accept = ACCEPTED;
+fileInput.multiple = true;
+const addInput = $<HTMLInputElement>('addFile');
+addInput.accept = ACCEPTED;
+addInput.multiple = true;
 const drop = $('drop');
 fileInput.addEventListener('change', () => {
-  if (fileInput.files?.[0]) openFile(fileInput.files[0]);
+  if (fileInput.files?.length) openFiles([...fileInput.files], false);
   fileInput.value = '';
+});
+addInput.addEventListener('change', () => {
+  if (addInput.files?.length) openFiles([...addInput.files], true);
+  addInput.value = '';
 });
 drop.addEventListener('dragover', (e) => {
   e.preventDefault();
@@ -117,143 +137,110 @@ drop.addEventListener('dragleave', () => drop.classList.remove('over'));
 drop.addEventListener('drop', (e) => {
   e.preventDefault();
   drop.classList.remove('over');
-  const f = e.dataTransfer?.files[0];
-  if (f) openFile(f);
+  const files = [...(e.dataTransfer?.files ?? [])];
+  if (files.length) openFiles(files, pieces.length > 0 && e.shiftKey);
 });
 
 function setNotes(notes: string[], error?: string) {
   $('modelNotes').replaceChildren(...notes.map((n) => li(n)), ...(error ? [li(error, 'error')] : []));
 }
 
-async function openFile(file: File) {
-  try {
-    model = await busy(`Lettura ${file.name}…`, () => loadModel(file));
-  } catch (e) {
-    setNotes([], e instanceof Error ? e.message : String(e));
+async function openFiles(files: File[], append: boolean) {
+  const loaded: Piece[] = [];
+  const notes: string[] = [];
+  const cell: CellRegion = {
+    worldBase: [robot.worldBaseX, robot.worldBaseY, robot.worldBaseZ],
+    bedCenter: [robot.bedCenterX, robot.bedCenterY],
+    bedSize: [robot.bedSizeX, robot.bedSizeY],
+  };
+  for (const file of files) {
+    try {
+      const model = await busy(`Lettura ${file.name}…`, () => loadModel(file));
+      const { parts, note } = pickPieces(model, cell);
+      if (note) notes.push(`${file.name}: ${note}`);
+      if (!parts.length) continue;
+      loaded.push({
+        id: nextPieceId++,
+        file: file.name,
+        label: parts.length === 1 && parts[0].name ? parts[0].name : file.name,
+        format: model.format,
+        mesh: combineParts(parts),
+      });
+      notes.push(...model.notes.filter((n) => !/ignorati/.test(n)).map((n) => `${file.name}: ${n}`));
+    } catch (e) {
+      notes.push(`${file.name}: ${e instanceof Error ? e.message : String(e)}`);
+    }
+  }
+  if (!loaded.length) {
+    setNotes(notes, 'Nessun pezzo caricato.');
     return;
   }
-  sourceName = file.name;
-  robot.programName = sanitizeProgramName(file.name);
+  pieces = append ? [...pieces, ...loaded] : loaded;
+  pieceNotes = append ? [...pieceNotes, ...notes] : notes;
+  sourceName = pieces.map((p) => p.file).join(' + ');
+  robot.programName = sanitizeProgramName(pieces[0].file);
   save('gb.robot', robot);
   renderRobotFields();
-  selected = defaultSelection(model);
-  setNotes(model.notes);
-  renderParts();
-  await applySelection();
+  await applyPieces();
 }
 
-/** Visible objects, minus exact duplicates (same triangle count and bounding box). */
-function defaultSelection(m: LoadedModel): Set<number> {
-  duplicates = new Set();
-  const keys = new Map<string, number>();
-  for (const p of m.parts) {
-    const b = computeBounds(p.mesh);
-    const key = [p.mesh.indices.length, ...b.min, ...b.max].map((v) => Math.round(v / 2)).join(',');
-    if (keys.has(key)) duplicates.add(p.id);
-    else keys.set(key, p.id);
-  }
-  let sel = m.parts.filter((p) => p.visible && !duplicates.has(p.id));
-  if (!sel.length) sel = m.parts.filter((p) => !duplicates.has(p.id));
-  return new Set(sel.map((p) => p.id));
-}
-
-function renderParts() {
+function renderPieces() {
   const box = $('parts');
-  if (!model || model.parts.length < 2) {
-    box.hidden = true;
-    return;
-  }
-  const groups = new Map<string, ModelPart[]>();
-  for (const p of model.parts) groups.set(p.layer, [...(groups.get(p.layer) ?? []), p]);
-  const refresh = () => {
-    renderParts();
-    applySelectionSoon();
-  };
-
+  box.hidden = !pieces.length;
   const head = document.createElement('div');
   head.className = 'head';
-  head.innerHTML = `<strong>Oggetti da stampare</strong><span class="muted">${selected.size}/${model.parts.length}</span>`;
-  const all = Object.assign(document.createElement('button'), { className: 'ghost small', textContent: 'Tutti' });
-  all.onclick = () => {
-    selected = new Set(model!.parts.map((p) => p.id));
-    refresh();
-  };
-  head.append(all);
-
-  const row = (label: string, meta: string, parts: ModelPart[], indent: boolean, hiddenLayer: boolean) => {
-    const r = document.createElement('label');
-    r.className = 'part-row' + (hiddenLayer ? ' hidden-layer' : '');
-    if (indent) r.style.paddingLeft = '26px';
-    const n = parts.filter((p) => selected.has(p.id)).length;
-    const cb = Object.assign(document.createElement('input'), { type: 'checkbox', checked: n === parts.length });
-    cb.indeterminate = n > 0 && n < parts.length;
-    cb.onchange = () => {
-      for (const p of parts) cb.checked ? selected.add(p.id) : selected.delete(p.id);
-      refresh();
-    };
-    const name = document.createElement('span');
-    name.className = 'name';
-    name.innerHTML = `${escapeHtml(label)}<span class="meta">${escapeHtml(meta)}</span>`;
-    const solo = Object.assign(document.createElement('button'), { className: 'ghost solo', textContent: 'solo', title: 'Seleziona solo questo' });
-    solo.onclick = (e) => {
-      e.preventDefault();
-      selected = new Set(parts.map((p) => p.id));
-      refresh();
-    };
-    r.append(cb, name, solo);
-    return r;
-  };
-  const sizeText = (parts: ModelPart[]) => {
-    const s = parts.map(partSize).reduce((a, b) => [Math.max(a[0], b[0]), Math.max(a[1], b[1]), Math.max(a[2], b[2])]);
-    return s.map((v) => v.toFixed(0)).join('×') + ' mm';
-  };
-
+  head.innerHTML = `<strong>Pezzi da stampare</strong>`;
+  const add = Object.assign(document.createElement('button'), { className: 'ghost small', textContent: '+ Aggiungi file' });
+  add.onclick = () => addInput.click();
+  head.append(add);
   const list = document.createElement('div');
   list.className = 'list';
-  for (const [layer, parts] of groups) {
-    const visible = parts.some((p) => p.visible);
-    const types = [...new Set(parts.map((p) => p.type))].join(', ');
-    list.append(row(`${layer}${visible ? '' : ' (nascosto)'}`, `${parts.length}× ${types} · fino a ${sizeText(parts)}`, parts, false, !visible));
-    if (parts.length > 1 && parts.length <= 30)
-      parts.forEach((p, i) =>
-        list.append(
-          row(
-            p.name || `${p.type} ${i + 1}`,
-            `${(p.mesh.indices.length / 3).toLocaleString('it-IT')} tri · ${sizeText([p])}${duplicates.has(p.id) ? ' · duplicato' : ''}`,
-            [p],
-            true,
-            !p.visible,
-          ),
-        ),
-      );
+  for (const p of pieces) {
+    const row = document.createElement('div');
+    row.className = 'part-row';
+    const s = meshStats(p.mesh).size;
+    const name = document.createElement('span');
+    name.className = 'name';
+    name.innerHTML = `${escapeHtml(p.label)}<span class="meta">${escapeHtml(p.format)} · ${s.map((v) => v.toFixed(0)).join('×')} mm</span>`;
+    const del = Object.assign(document.createElement('button'), { className: 'ghost solo', textContent: '✕', title: 'Rimuovi pezzo' });
+    del.onclick = () => {
+      pieces = pieces.filter((q) => q !== p);
+      if (pieces.length) applyPieces();
+      else location.reload();
+    };
+    row.append(document.createElement('span'), name, del);
+    list.append(row);
   }
-  box.hidden = false;
   box.replaceChildren(head, list);
 }
 
-let selTimer = 0;
-function applySelectionSoon() {
-  clearTimeout(selTimer);
-  selTimer = window.setTimeout(applySelection, 450);
+/** Pieces from different files are laid out side by side along X, 40 mm apart. */
+function layoutPieces(ps: Piece[]): MeshData {
+  if (ps.length === 1) return ps[0].mesh;
+  const gap = 40;
+  const widths = ps.map((p) => meshStats(p.mesh).size[0]);
+  let x = -(widths.reduce((a, b) => a + b, 0) + gap * (ps.length - 1)) / 2;
+  const placed = ps.map((p, i) => {
+    const m = dropToOrigin(p.mesh);
+    const moved = translate(m, x + widths[i] / 2, 0, 0);
+    x += widths[i] + gap;
+    return moved;
+  });
+  return orientOutward(weld(mergeMeshes(placed), 1e-3));
 }
 
-async function applySelection() {
-  if (!model) return;
-  try {
-    mesh = combineParts(model.parts.filter((p) => selected.has(p.id)));
-  } catch (e) {
-    mesh = null;
-    setNotes(model.notes, e instanceof Error ? e.message : String(e));
-    return;
-  }
-  setNotes(model.notes);
+async function applyPieces() {
+  renderPieces();
+  setNotes(pieceNotes);
+  mesh = layoutPieces(pieces);
   showModelInfo(mesh);
   $('empty').hidden = true;
   lastSrc = '';
   viewer.setToolpath(null, null, [], [0, 0, 0]);
   const off = placementOffset(mesh, robot);
   viewer.setModel(dropToOrigin(mesh), off, 1);
-  viewer.setBed(robot.bedSizeX, robot.bedSizeY, off);
+  viewer.setBed(robot.bedSizeX, robot.bedSizeY, [robot.bedCenterX, robot.bedCenterY, off[2]]);
+  viewer.setRobot(robotRootInBase(robot), robot.maxReach);
   viewer.fit();
   await analyze();
 }
@@ -261,7 +248,7 @@ async function applySelection() {
 function showModelInfo(m: MeshData) {
   const s = meshStats(m);
   const rows: [string, string][] = [
-    ['Formato', model?.format ?? ''],
+    ['Pezzi', pieces.map((p) => p.format).join(', ')],
     ['Triangoli', s.triangles.toLocaleString('it-IT')],
     ['Dimensioni', `${s.size.map((v) => v.toFixed(1)).join(' × ')} mm`],
     ['Chiusa', s.openEdges ? `no — ${s.openEdges} bordi aperti` : 'sì (watertight)'],
@@ -287,14 +274,15 @@ async function analyze() {
     if (m !== mesh) return;
     orientations = res.orientations;
   } catch (e) {
-    if (!(e instanceof Superseded) && m === mesh) setNotes(model?.notes ?? [], e instanceof Error ? e.message : String(e));
+    if (!(e instanceof Superseded) && m === mesh) setNotes(pieceNotes, e instanceof Error ? e.message : String(e));
     return;
   }
   orientIdx = 0;
   manual = [...IDENTITY] as Mat3;
+  fitNext = true;
   for (const id of ['step-orient', 'step-print', 'step-robot', 'step-out']) $(id).hidden = false;
   renderOrientations();
-  await build();
+  return build();
 }
 
 function renderOrientations() {
@@ -359,6 +347,18 @@ const PRINT_FIELDS: Field[] = [
   { key: 'travelLift', label: 'Sollevamento spost. (mm)', kind: 'number', step: 1, min: 0 },
   { key: 'overhangAngle', label: 'Sbalzo critico (°)', kind: 'number', step: 1, min: 1 },
   { key: 'thinWallMax', label: 'Guscio → linea media fino a (mm)', kind: 'number', step: 1, min: 0 },
+  {
+    key: 'startMode',
+    label: 'Punto iniziale',
+    kind: 'select',
+    full: true,
+    options: [
+      ['auto', 'Automatico (angolo davanti-sinistra)'],
+      ['point', 'Punto scelto (X/Y in BASE)'],
+    ],
+  },
+  { key: 'startX', label: 'Inizio X in BASE', kind: 'number', step: 5 },
+  { key: 'startY', label: 'Inizio Y in BASE', kind: 'number', step: 5 },
 ];
 
 const ROBOT_FIELDS: Field[] = [
@@ -397,11 +397,14 @@ const ROBOT_FIELDS: Field[] = [
   { key: 'originX', label: 'Centro X in BASE', kind: 'number', step: 1 },
   { key: 'originY', label: 'Centro Y in BASE', kind: 'number', step: 1 },
   { key: 'originZ', label: 'Piano Z in BASE', kind: 'number', step: 0.5 },
+  { key: 'rotationZ', label: 'Rotazione pezzo Z (°)', kind: 'number', step: 15 },
   { key: 'worldBaseX', label: 'BASE in mondo X', kind: 'number', step: 1 },
   { key: 'worldBaseY', label: 'BASE in mondo Y', kind: 'number', step: 1 },
   { key: 'worldBaseZ', label: 'BASE in mondo Z', kind: 'number', step: 1 },
   { key: 'bedSizeX', label: 'Piano X (mm)', kind: 'number', step: 10 },
   { key: 'bedSizeY', label: 'Piano Y (mm)', kind: 'number', step: 10 },
+  { key: 'bedCenterX', label: 'Centro piano X', kind: 'number', step: 10 },
+  { key: 'bedCenterY', label: 'Centro piano Y', kind: 'number', step: 10 },
   { group: 'Dati controller (per controllo sbraccio)' },
   ...['X', 'Y', 'Z', 'A', 'B', 'C'].map((k, i): Field => ({ key: `baseData.${i}`, label: `BASE_DATA ${k}`, kind: 'number', step: 1 })),
   ...['X', 'Y', 'Z', 'A', 'B', 'C'].map((k, i): Field => ({ key: `toolData.${i}`, label: `TOOL_DATA ${k}`, kind: 'number', step: 1 })),
@@ -474,11 +477,15 @@ const buildSoon = () => {
   buildTimer = window.setTimeout(build, 400);
 };
 
-renderFields($('printFields'), PRINT_FIELDS, print as unknown as Record<string, unknown>, (key) => {
-  save('gb.print', print);
-  if (key === 'overhangAngle' || key === 'layerHeight' || key === 'thinWallMax') analyze();
-  else buildSoon();
-});
+function renderPrintFields() {
+  renderFields($('printFields'), PRINT_FIELDS, print as unknown as Record<string, unknown>, (key) => {
+    save('gb.print', print);
+    if (ANALYSIS_KEYS.includes(key)) analyze();
+    else buildSoon();
+  });
+}
+const ANALYSIS_KEYS = ['overhangAngle', 'layerHeight', 'thinWallMax'];
+renderPrintFields();
 
 function renderRobotFields() {
   renderFields($('robotFields'), ROBOT_FIELDS, robot as unknown as Record<string, unknown>, () => {
@@ -511,9 +518,12 @@ interface BuildMsg {
 }
 
 let currentMeta: Toolpath | null = null;
+let lastBuild: BuildMsg | null = null;
+/** Re-frame the camera only on a new model/orientation, not on every tweak. */
+let fitNext = true;
 
-async function build() {
-  if (!mesh || !orientations.length) return;
+async function build(): Promise<BuildMsg | null> {
+  if (!mesh || !orientations.length) return null;
   const matrix = mulMat3(manual, orientations[orientIdx].matrix);
   const m = mesh;
   let r: BuildMsg;
@@ -523,23 +533,27 @@ async function build() {
     );
   } catch (e) {
     if (!(e instanceof Superseded)) $('warnings').replaceChildren(li(e instanceof Error ? e.message : String(e)));
-    return;
+    return null;
   }
-  if (m !== mesh) return;
+  if (m !== mesh) return null;
   lastSrc = r.src;
   currentMeta = r.meta;
   viewer.setModel(r.mesh, r.offset, parseFloat($<HTMLInputElement>('opacity').value));
-  viewer.setBed(robot.bedSizeX, robot.bedSizeY, r.offset);
+  viewer.setBed(robot.bedSizeX, robot.bedSizeY, [robot.bedCenterX, robot.bedCenterY, r.offset[2]]);
   viewer.setToolpath(r.xyz, r.ext, r.meta.layerStart, r.offset);
   viewer.setRobot(robotRootInBase(robot), robot.maxReach);
+  viewer.setStartMarker(r.xyz.length ? [r.xyz[0] + r.offset[0], r.xyz[1] + r.offset[1], r.xyz[2] + r.offset[2]] : null);
   const slider = $<HTMLInputElement>('layerSlider');
   slider.max = String(Math.max(0, r.meta.layerStart.length - 1));
   slider.value = slider.max;
   updateLayerLabel();
   $('vpTools').hidden = false;
-  viewer.fit();
+  if (fitNext) viewer.fit();
+  fitNext = false;
+  lastBuild = r;
   renderStats(r);
   if (!$('srcPreview').hidden) showPreview();
+  return r;
 }
 
 function updateLayerLabel() {
@@ -553,6 +567,33 @@ $<HTMLInputElement>('layerSlider').addEventListener('input', (e) => {
 });
 $<HTMLInputElement>('opacity').addEventListener('input', (e) => viewer.setModelOpacity(+(e.target as HTMLInputElement).value));
 $('fitBtn').onclick = () => viewer.fit();
+
+// ---------- click-to-place / click-to-start ----------
+
+let pick: 'none' | 'place' | 'start' = 'none';
+function setPick(mode: 'none' | 'place' | 'start') {
+  pick = pick === mode ? 'none' : mode;
+  viewer.setPickMode(pick);
+  $('placeBtn').classList.toggle('active', pick === 'place');
+  $('startBtn').classList.toggle('active', pick === 'start');
+  $('pickHint').hidden = pick === 'none';
+  $('pickHint').textContent = pick === 'place' ? 'Clicca sul piano dove mettere il centro del pezzo' : 'Clicca vicino al punto dove iniziare a stampare';
+}
+$('placeBtn').onclick = () => setPick('place');
+$('startBtn').onclick = () => setPick('start');
+viewer.onPick = (mode, x, y) => {
+  if (mode === 'place') {
+    Object.assign(robot, { placement: 'origin', originX: Math.round(x), originY: Math.round(y) });
+    save('gb.robot', robot);
+    renderRobotFields();
+  } else {
+    Object.assign(print, { startMode: 'point', startX: Math.round(x), startY: Math.round(y) });
+    save('gb.print', print);
+    renderPrintFields();
+  }
+  setPick('none');
+  build();
+};
 
 function fmtTime(sec: number) {
   const h = Math.floor(sec / 3600);
@@ -621,3 +662,94 @@ $('previewBtn').onclick = () => {
   pre.hidden = !pre.hidden;
   if (!pre.hidden) showPreview();
 };
+
+// ---------- chat with Claude ----------
+
+const ENUMS: Record<string, string[]> = {
+  mode: ['auto', 'spiral', 'planar'],
+  startMode: ['auto', 'point'],
+  placement: ['origin', 'file'],
+};
+
+/** Apply a partial settings object after checking every key and type against the defaults. */
+function applyPatch(target: Record<string, unknown>, defaults: Record<string, unknown>, patch: Record<string, unknown>, name: string): string[] {
+  const errors: string[] = [];
+  for (const [k, v] of Object.entries(patch)) {
+    const def = defaults[k];
+    if (def === undefined) errors.push(`${name}.${k}: chiave sconosciuta`);
+    else if (ENUMS[k] && !ENUMS[k].includes(v as string)) errors.push(`${name}.${k}: valori ammessi ${ENUMS[k].join(', ')}`);
+    else if (Array.isArray(def)) {
+      if (!Array.isArray(v) || v.length !== def.length || !v.every((x) => typeof x === 'number' && Number.isFinite(x)))
+        errors.push(`${name}.${k}: serve un array di ${def.length} numeri`);
+      else target[k] = [...v];
+    } else if (typeof def === 'number' && !(typeof v === 'number' && Number.isFinite(v))) errors.push(`${name}.${k}: serve un numero`);
+    else if (typeof def !== 'number' && typeof v !== typeof def) errors.push(`${name}.${k}: tipo ${typeof def} atteso`);
+    else target[k] = v;
+  }
+  return errors;
+}
+
+function resultSummary(r: BuildMsg | null) {
+  if (!r) return null;
+  const t = r.meta;
+  const round = (v: number[]) => v.map((x) => Math.round(x * 10) / 10);
+  return {
+    mode: t.mode,
+    layers: t.layerCount,
+    points: r.xyz.length / 3,
+    printLength_m: +(t.printLength / 1000).toFixed(2),
+    travels: t.travels,
+    firstPointBase: r.xyz.length ? round([r.xyz[0] + r.offset[0], r.xyz[1] + r.offset[1], r.xyz[2] + r.offset[2]]) : null,
+    partOriginBase: round(r.offset),
+    extentBase: { min: round(r.min), max: round(r.max) },
+    flangeReach_mm: { min: Math.round(r.reach.minRadius), max: Math.round(r.reach.maxRadius), outOfReach: r.reach.outOfReach },
+    warnings: t.warnings,
+  };
+}
+
+let needsAnalysis = false;
+mountChat({
+  state: () => ({
+    model: mesh
+      ? { files: pieces.map((p) => p.file), size_mm: meshStats(mesh).size.map((v) => Math.round(v)) }
+      : null,
+    orientations: orientations.map((o, i) => ({ index: i, label: o.label, height: Math.round(o.height), notes: o.notes })),
+    currentOrientation: orientIdx,
+    manualRotationApplied: manual.some((v, i) => v !== IDENTITY[i]),
+    print,
+    robot,
+    result: resultSummary(lastBuild),
+  }),
+  update: (target, patch) => {
+    const errs =
+      target === 'print'
+        ? applyPatch(print as unknown as Record<string, unknown>, DEFAULT_PRINT as unknown as Record<string, unknown>, patch, 'print')
+        : applyPatch(robot as unknown as Record<string, unknown>, DEFAULT_ROBOT as unknown as Record<string, unknown>, patch, 'robot');
+    if (target === 'print' && Object.keys(patch).some((k) => ANALYSIS_KEYS.includes(k))) needsAnalysis = true;
+    save('gb.print', print);
+    save('gb.robot', robot);
+    renderPrintFields();
+    renderRobotFields();
+    return errs;
+  },
+  chooseOrientation: (i) => {
+    if (!Number.isInteger(i) || i < 0 || i >= orientations.length) return `indice fuori intervallo (0–${orientations.length - 1})`;
+    orientIdx = i;
+    manual = [...IDENTITY] as Mat3;
+    fitNext = true;
+    renderOrientations();
+    return null;
+  },
+  rotate: (axis, deg) => {
+    if (!mesh) return 'nessun modello caricato';
+    manual = mulMat3({ x: rotX, y: rotY, z: rotZ }[axis](deg), manual);
+    fitNext = true;
+    return null;
+  },
+  rebuild: async () => {
+    if (!mesh) return { error: 'Nessun modello caricato: chiedi all’utente di caricarne uno.' };
+    const r = needsAnalysis ? await analyze() : await build();
+    needsAnalysis = false;
+    return resultSummary(r ?? lastBuild);
+  },
+});

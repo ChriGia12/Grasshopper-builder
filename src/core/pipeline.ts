@@ -1,6 +1,6 @@
 // End-to-end build used by the worker: orient → slice → toolpath → KUKA .src.
 import { writeKukaSrc } from './kuka';
-import { applyMatrix, computeBounds, dropToOrigin, type Mat3, type MeshData } from './mesh';
+import { applyMatrix, computeBounds, dropToOrigin, mulMat3, rotZ, type Mat3, type MeshData } from './mesh';
 import type { PrintSettings, RobotSettings } from './settings';
 import { reachReport, type ReachReport } from './robot';
 import { buildToolpath, type Toolpath } from './toolpath';
@@ -37,9 +37,11 @@ export function runBuild(
   robot: RobotSettings,
   sourceName: string,
 ): BuildResult {
-  const mesh = dropToOrigin(applyMatrix(original, matrix));
-  const toolpath = buildToolpath(mesh, print);
+  const mesh = dropToOrigin(applyMatrix(original, mulMat3(rotZ(robot.rotationZ), matrix)));
   const offset = placementOffset(original, robot);
+  const start: [number, number] | undefined =
+    print.startMode === 'point' ? [print.startX - offset[0], print.startY - offset[1]] : undefined;
+  const toolpath = buildToolpath(mesh, print, undefined, start);
   const placed: RobotSettings = { ...robot, originX: offset[0], originY: offset[1], originZ: offset[2] };
   const src = writeKukaSrc(toolpath, placed, { sourceName, layerHeight: print.layerHeight });
 
@@ -52,11 +54,12 @@ export function runBuild(
       max[k] = Math.max(max[k], v[k]);
     }
   }
-  const b = computeBounds(mesh);
-  const sx = b.max[0] - b.min[0];
-  const sy = b.max[1] - b.min[1];
-  if (sx > robot.bedSizeX || sy > robot.bedSizeY)
-    toolpath.warnings.push(`Il pezzo (${sx.toFixed(0)}×${sy.toFixed(0)} mm) è più grande del piano (${robot.bedSizeX}×${robot.bedSizeY} mm).`);
+  const bx0 = robot.bedCenterX - robot.bedSizeX / 2;
+  const by0 = robot.bedCenterY - robot.bedSizeY / 2;
+  if (min[0] < bx0 || min[1] < by0 || max[0] > bx0 + robot.bedSizeX || max[1] > by0 + robot.bedSizeY)
+    toolpath.warnings.push(
+      `Il percorso esce dal piano (${robot.bedSizeX}×${robot.bedSizeY} mm centrato in X ${robot.bedCenterX}, Y ${robot.bedCenterY}): sposta o ruota il pezzo.`,
+    );
   if (min[2] < 0) toolpath.warnings.push('Alcuni punti hanno Z negativa nel sistema BASE: controlla la posizione.');
 
   const basePts = new Float64Array(toolpath.points.length * 3);

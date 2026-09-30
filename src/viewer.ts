@@ -13,6 +13,11 @@ export class Viewer {
   private nozzle: THREE.Mesh;
   private bed: THREE.Group | null = null;
   private robot: THREE.Group | null = null;
+  private startMarker: THREE.Mesh;
+  private pickMode: 'none' | 'place' | 'start' = 'none';
+  private bedZ = 0;
+  /** Called with BASE coordinates when the user clicks the bed in a pick mode. */
+  onPick: ((mode: 'place' | 'start', x: number, y: number) => void) | null = null;
   private layerStart: number[] = [];
   private xyz: Float32Array | null = null;
   private offset: [number, number, number] = [0, 0, 0];
@@ -38,6 +43,24 @@ export class Viewer {
     this.nozzle.rotation.x = -Math.PI / 2;
     this.nozzle.visible = false;
     this.scene.add(this.nozzle);
+
+    this.startMarker = new THREE.Mesh(new THREE.SphereGeometry(7, 20, 12), new THREE.MeshBasicMaterial({ color: 0x00e0ff }));
+    this.startMarker.visible = false;
+    this.scene.add(this.startMarker);
+
+    // A click (not a drag) on the bed plane picks a point in BASE coordinates.
+    let down: [number, number] | null = null;
+    const el = this.renderer.domElement;
+    el.addEventListener('pointerdown', (e) => (down = [e.clientX, e.clientY]));
+    el.addEventListener('pointerup', (e) => {
+      if (!down || this.pickMode === 'none' || Math.hypot(e.clientX - down[0], e.clientY - down[1]) > 5) return;
+      const r = el.getBoundingClientRect();
+      const ndc = new THREE.Vector2(((e.clientX - r.left) / r.width) * 2 - 1, -((e.clientY - r.top) / r.height) * 2 + 1);
+      const ray = new THREE.Raycaster();
+      ray.setFromCamera(ndc, this.camera);
+      const hit = new THREE.Vector3();
+      if (ray.ray.intersectPlane(new THREE.Plane(new THREE.Vector3(0, 0, 1), -this.bedZ), hit)) this.onPick?.(this.pickMode, hit.x, hit.y);
+    });
 
     this.applyTheme();
     matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => this.applyTheme());
@@ -85,6 +108,16 @@ export class Viewer {
     this.setModelOpacity(opacity);
   }
 
+  setPickMode(mode: 'none' | 'place' | 'start') {
+    this.pickMode = mode;
+    this.renderer.domElement.style.cursor = mode === 'none' ? '' : 'crosshair';
+  }
+
+  setStartMarker(p: [number, number, number] | null) {
+    this.startMarker.visible = !!p;
+    if (p) this.startMarker.position.set(...p);
+  }
+
   setModelOpacity(opacity: number) {
     if (!this.model) return;
     const m = this.model.material as THREE.MeshStandardMaterial;
@@ -109,6 +142,7 @@ export class Viewer {
     grid.position.z = 0.2;
     grp.add(grid);
     grp.position.set(center[0], center[1], center[2] - 0.5);
+    this.bedZ = center[2];
     this.bed = grp;
     this.scene.add(grp);
   }
