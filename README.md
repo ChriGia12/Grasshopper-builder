@@ -1,5 +1,7 @@
 # KinePath
 
+*[English version](README.en.md)*
+
 Sito web che sostituisce la catena Rhino/Grasshopper per la **stampa 3D robotica a estrusione con KUKA**:
 
 1. carichi un modello **mesh o BREP**,
@@ -55,9 +57,7 @@ Il robot sta nel mondo Rhino a (0, −1000, 0): il punto disegnato in `BASE ROBO
 
 - **Slicing esatto**: ogni strato è l'intersezione del piano con la mesh; i segmenti vengono concatenati usando la topologia (spigoli condivisi), quindi i contorni sono chiusi e seguono la geometria reale. Semplificazione Douglas–Peucker con tolleranza impostabile (default 0,2 mm), opzionale suddivisione dei LIN troppo lunghi (come "Divide Length").
 - **Orientamento**: prova ±X/±Y/±Z e le facce piane più grandi dell'inviluppo convesso. Punteggio su sbalzi oltre l'angolo critico, isole che partono nel vuoto, numero di contorni per strato (ogni contorno separato = stop dell'estrusore), superficie d'appoggio, altezza.
-- **Modo di stampa** (automatico):
-  - *Spirale continua* (vase mode) se il pezzo è un unico contorno per strato: la Z sale lungo il contorno, niente giunzioni né stop. Gli strati di bordo che non sono un anello unico (es. bordi arrotondati) vengono stampati planari.
-  - *Strati planari* altrimenti: cambio strato sulla stessa verticale senza fermare l'estrusore (come Tavolino1); tra contorni separati estrusore spento, sollevamento e riaccensione.
+- **Modo di stampa**: di default *contorno a strati* (Z fissa per strato, cambio strato sulla stessa verticale senza fermare l'estrusore, come Tavolino1); tra contorni separati estrusore spento, sollevamento e riaccensione. Gli altri modi (spirale, pieno, superficie) si scelgono dal menu: vedi la tabella sotto. La spirale si usa solo se ogni strato è un unico contorno, altrimenti torna agli strati planari.
 - **Gusci sottili**: un solido cavo con spessore ≤ "Guscio → linea media" viene stampato con un solo cordolo sulla linea media (invece di pelle esterna + interna).
 - **Pareti multiple**: offset verso l'interno con Clipper.
 
@@ -77,7 +77,7 @@ Due modalità (sezione *Robot KUKA e piano*):
 - **Centra sul punto indicato**: il centro del pezzo va in `X/Y` sul piano (Z 38 in BASE); la prima passata è 0,5 mm sopra il piano → Z 38,5 come Tavolino1.
 - **Mantieni posizione del file**: usa la posizione del pezzo nel file Rhino e sottrae l'origine della BASE in coordinate mondo (default 1448 / −1000 / 5, dal post-processore Python).
 
-I dati del controller (`BASE_DATA[1]`, `TOOL_DATA[11]`, E1–E4 = 0) sono fissi e vengono scritti come commento nell'intestazione del `.src`; il programma usa comunque i valori salvati nel controller.
+I dati del controller (`BASE_DATA[1]`, `TOOL_DATA[11]`, E1–E4 = 0) sono fissi e servono alla simulazione e al controllo di raggiungibilità. Il `.src` richiama `BASE_DATA[1]` e `TOOL_DATA[11]` del controller e, fuori dai movimenti `LIN`/`PTP`, è identico byte per byte a `Tavolino1.src`.
 
 Tutti i parametri restano salvati nel browser.
 
@@ -106,7 +106,9 @@ src/core/mesh.ts         mesh indicizzata, saldatura vertici, trasformazioni
 src/core/slicer.ts       intersezione piano/mesh → contorni chiusi
 src/core/walls.ts        pareti interne e linea media dei gusci (Clipper)
 src/core/orientation.ts  analisi orientamenti
-src/core/toolpath.ts     percorso spirale/planare, spostamenti
+src/core/toolpath.ts     percorso: contorno a strati, spirale, pieno, superficie
+src/core/zigzag.ts       riempimento a serpentina e ordinamento delle passate
+src/core/surface.ts      superficie superiore: proiezione, normali, parametro C
 src/core/kuka.ts         writer KRL .src
 src/core/pipeline.ts     orientamento → percorso → .src
 src/worker.ts            calcolo in Web Worker
