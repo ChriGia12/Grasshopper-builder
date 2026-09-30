@@ -1,6 +1,6 @@
 import { defineConfig } from 'vitest/config';
 
-// Relative base so the build works on GitHub Pages under /Grasshopper-builder/.
+// Relative base so the build works on GitHub Pages under /KinePath/.
 export default defineConfig({
   base: './',
   worker: { format: 'es' },
