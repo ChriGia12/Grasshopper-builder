@@ -464,7 +464,6 @@ async function build(): Promise<BuildMsg | null> {
   viewer.setModel(r.mesh, r.offset, parseFloat($<HTMLInputElement>('opacity').value));
   viewer.setBed(robot.bedSizeX, robot.bedSizeY, [robot.bedCenterX, robot.bedCenterY, r.offset[2]]);
   viewer.setToolpath(r.xyz, r.ext, r.meta.layerStart, r.offset);
-  if (r.reach.first) showRobot(r.reach.first);
   viewer.setStartMarker(r.xyz.length ? [r.xyz[0] + r.offset[0], r.xyz[1] + r.offset[1], r.xyz[2] + r.offset[2]] : null);
   const slider = $<HTMLInputElement>('layerSlider');
   slider.max = String(Math.max(0, r.meta.layerStart.length - 1));
@@ -474,6 +473,7 @@ async function build(): Promise<BuildMsg | null> {
   if (fitNext) viewer.fit();
   fitNext = false;
   lastBuild = r;
+  resetSim(r);
   renderStats(r);
   if (!$('srcPreview').hidden) showPreview();
   return r;
@@ -486,16 +486,83 @@ function updateLayerLabel() {
 }
 $<HTMLInputElement>('layerSlider').addEventListener('input', (e) => {
   const layer = +(e.target as HTMLInputElement).value;
-  viewer.showUpToLayer(layer);
   updateLayerLabel();
-  // Put the nozzle on the last point of the visible layers.
   if (lastBuild && currentMeta) {
     const n = lastBuild.xyz.length / 3;
-    const i = Math.max(0, (layer + 1 < currentMeta.layerStart.length ? currentMeta.layerStart[layer + 1] : n) - 1);
-    const o = lastBuild.offset;
-    const q = poseAt([lastBuild.xyz[i * 3] + o[0], lastBuild.xyz[i * 3 + 1] + o[1], lastBuild.xyz[i * 3 + 2] + o[2]], robot, robotPose);
-    if (q) showRobot(q);
+    const end = layer + 1 < currentMeta.layerStart.length ? currentMeta.layerStart[layer + 1] : n;
+    stopSim();
+    setSimIndex(Math.max(0, end - 1));
   }
+});
+
+// ---------- simulation: the robot runs the LIN moves of the .src ----------
+
+let simIndex = 0;
+let simPos = 0; // mm travelled along the path
+let simCum = new Float64Array(0); // cumulative path length per point
+let playing = false;
+let lastFrame = 0;
+
+function resetSim(r: BuildMsg) {
+  const n = r.xyz.length / 3;
+  simCum = new Float64Array(n);
+  for (let i = 1; i < n; i++)
+    simCum[i] = simCum[i - 1] + Math.hypot(r.xyz[i * 3] - r.xyz[i * 3 - 3], r.xyz[i * 3 + 1] - r.xyz[i * 3 - 2], r.xyz[i * 3 + 2] - r.xyz[i * 3 - 1]);
+  const slider = $<HTMLInputElement>('simSlider');
+  slider.max = String(Math.max(0, n - 1));
+  stopSim();
+  setSimIndex(n - 1);
+}
+
+function setSimIndex(i: number) {
+  if (!lastBuild) return;
+  const r = lastBuild;
+  const n = r.xyz.length / 3;
+  simIndex = Math.max(0, Math.min(n - 1, i));
+  simPos = simCum[simIndex] ?? 0;
+  $<HTMLInputElement>('simSlider').value = String(simIndex);
+  viewer.showProgress(simIndex);
+  const o = r.offset;
+  const p: [number, number, number] = [r.xyz[simIndex * 3] + o[0], r.xyz[simIndex * 3 + 1] + o[1], r.xyz[simIndex * 3 + 2] + o[2]];
+  const q = poseAt(p, robot, robotPose);
+  if (q) showRobot(q);
+  const f = (v: number) => v.toFixed(1);
+  const move = r.ext[simIndex] ? 'stampa' : 'spostamento (estrusore spento)';
+  $('simReadout').innerHTML =
+    `LIN ${simIndex + 1} / ${n} · ${move}\nX ${f(p[0])}  Y ${f(p[1])}  Z ${f(p[2])}  A ${robot.a}  B ${robot.b}  C ${robot.c}\n` +
+    (q ? q.map((v, k) => `A${k + 1} ${v.toFixed(1)}°`).join('  ') : '<span class="bad">punto fuori portata del robot</span>');
+}
+
+function stopSim() {
+  playing = false;
+  $('playBtn').textContent = '▶ Simula';
+}
+
+function tick(t: number) {
+  if (!playing || !lastBuild) return;
+  const dt = Math.min(0.1, (t - lastFrame) / 1000);
+  lastFrame = t;
+  simPos += dt * robot.velCP * 1000 * +$<HTMLSelectElement>('simSpeed').value;
+  let i = simIndex;
+  while (i < simCum.length - 1 && simCum[i + 1] <= simPos) i++;
+  setSimIndex(i);
+  simPos = Math.max(simPos, simCum[i]);
+  if (i >= simCum.length - 1) stopSim();
+  else requestAnimationFrame(tick);
+}
+
+$('playBtn').onclick = () => {
+  if (!lastBuild) return;
+  if (playing) return stopSim();
+  if (simIndex >= simCum.length - 1) setSimIndex(0);
+  playing = true;
+  $('playBtn').textContent = '⏸ Pausa';
+  lastFrame = performance.now();
+  requestAnimationFrame(tick);
+};
+$<HTMLInputElement>('simSlider').addEventListener('input', (e) => {
+  stopSim();
+  setSimIndex(+(e.target as HTMLInputElement).value);
 });
 $<HTMLInputElement>('opacity').addEventListener('input', (e) => viewer.setModelOpacity(+(e.target as HTMLInputElement).value));
 $('fitBtn').onclick = () => viewer.fit();

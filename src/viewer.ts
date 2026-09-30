@@ -19,6 +19,7 @@ export class Viewer {
   private controls: OrbitControls;
   private model: THREE.Mesh | null = null;
   private path: THREE.LineSegments | null = null;
+  private ghost: THREE.LineSegments | null = null;
   private nozzle: THREE.Mesh;
   private bed: THREE.Group | null = null;
   private robotRoot = new THREE.Group();
@@ -193,11 +194,13 @@ export class Viewer {
   }
 
   setToolpath(xyz: Float32Array | null, ext: Uint8Array | null, layerStart: number[], offset: [number, number, number]) {
-    if (this.path) {
-      this.scene.remove(this.path);
-      this.path.geometry.dispose();
+    for (const l of [this.path, this.ghost]) {
+      if (!l) continue;
+      this.scene.remove(l);
+      l.geometry.dispose();
     }
     this.path = null;
+    this.ghost = null;
     this.xyz = xyz;
     this.layerStart = layerStart;
     this.offset = offset;
@@ -226,16 +229,26 @@ export class Viewer {
     g.setAttribute('color', new THREE.BufferAttribute(col, 3));
     this.path = new THREE.LineSegments(g, new THREE.LineBasicMaterial({ vertexColors: true }));
     this.scene.add(this.path);
+    // Whole path in light grey, so what is still to print stays readable during the simulation.
+    const gg = new THREE.BufferGeometry();
+    gg.setAttribute('position', g.getAttribute('position'));
+    this.ghost = new THREE.LineSegments(gg, new THREE.LineBasicMaterial({ color: 0x9aa4ae, transparent: true, opacity: 0.18, depthWrite: false }));
+    this.scene.add(this.ghost);
     this.showUpToLayer(layers - 1);
   }
 
   /** Show layers 0..layer (inclusive) and park the nozzle at the last visible point. */
   showUpToLayer(layer: number) {
-    if (!this.path || !this.xyz) return;
+    if (!this.xyz) return;
     const n = this.xyz.length / 3;
     const end = layer + 1 < this.layerStart.length ? this.layerStart[layer + 1] : n;
-    this.path.geometry.setDrawRange(0, Math.max(0, end - 1) * 2);
-    const i = Math.max(0, end - 1);
+    this.showProgress(Math.max(0, end - 1));
+  }
+
+  /** Simulation: path printed up to point i (coloured), nozzle on point i. */
+  showProgress(i: number) {
+    if (!this.path || !this.xyz) return;
+    this.path.geometry.setDrawRange(0, i * 2);
     this.nozzle.position.set(
       this.xyz[i * 3] + this.offset[0],
       this.xyz[i * 3 + 1] + this.offset[1],
@@ -244,19 +257,25 @@ export class Viewer {
     this.nozzle.visible = true;
   }
 
+  /** Frame the whole cell (robot, table) together with the part and the path. */
   fit() {
+    this.scene.updateMatrixWorld(true);
     const box = new THREE.Box3();
-    if (this.model) box.expandByObject(this.model);
+    this.scene.traverse((o) => {
+      if ((o as THREE.Mesh).isMesh && o.visible && o !== this.nozzle && o !== this.startMarker) box.expandByObject(o);
+    });
     if (this.path) box.expandByObject(this.path);
-    if (box.isEmpty()) box.setFromObject(this.robotRoot).expandByObject(this.bed ?? this.robotRoot);
     if (box.isEmpty()) return;
     const center = box.getCenter(new THREE.Vector3());
     const size = box.getSize(new THREE.Vector3()).length();
+    // Aim a little low so the scene sits above the control panel at the bottom of the viewport.
+    center.z -= size * 0.12;
     this.controls.target.copy(center);
-    // View from the side opposite the robot (robot sits at −Y), a bit from above.
-    this.camera.position.copy(center).add(new THREE.Vector3(1.1, 1.3, 0.9).normalize().multiplyScalar(Math.max(size * 1.6, 1800)));
-    this.camera.near = size / 200;
+    // View from the table side, a bit from above, so the robot faces the camera.
+    this.camera.position.copy(center).add(new THREE.Vector3(0.75, -0.9, 0.65).normalize().multiplyScalar(size * 0.95));
+    this.camera.near = size / 500;
     this.camera.far = size * 50;
     this.camera.updateProjectionMatrix();
   }
+
 }

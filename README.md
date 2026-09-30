@@ -23,7 +23,11 @@ La geometria viene da `BASE ROBOT.3dm` ed è salvata in `public/cell.bin` (≈2 
 node scripts/build-cell.mjs "/percorso/BASE ROBOT.3dm"
 ```
 
-Il robot è posizionato con i dati del controller: `BASE_DATA[1] = {X 0, Y 1000, Z 0}` rispetto alla base del robot, BASE in coordinate Rhino (1448, −1000, 5) come nel post-processore Python. Per ogni punto del percorso il sito risolve la cinematica inversa e segnala i punti fuori portata o oltre i limiti degli assi; lo slider degli strati muove il robot sull'ultimo punto visibile.
+Il robot sta nell'origine del mondo Rhino (il punto disegnato in `BASE ROBOT.3dm`), con la base 32 mm sotto il piano superiore delle tavole. Di conseguenza la BASE usata dal post-processore Python (1448, −1000, 5) è `BASE_DATA[1]` rispetto al robot.
+
+**Orientamento utensile.** L'asse del mandrino è l'asse Z del TCP, come calibrato sul robot: con A = −180°, B = 0° il parametro C inclina l'utensile (C 180 = verticale verso il basso, C 135 ≈ 45°, C 90 / 270 = orizzontale). Con A −180 / B 0 / C 180 il robot lavora in verticale sopra il punto.
+
+**Simulazione.** Il pulsante *▶ Simula* fa eseguire al robot i movimenti `LIN` del file `.src`, alla velocità reale ($VEL.CP) moltiplicata per 1–500×. Il percorso già eseguito è colorato, quello da eseguire resta grigio chiaro; sotto sono indicati la riga `LIN` corrente, le coordinate X/Y/Z/A/B/C scritte nel file e gli angoli A1–A6. Lo slider permette di andare a qualsiasi movimento, quello degli strati salta alla fine di uno strato. Per ogni punto il sito risolve la cinematica inversa e segnala i punti fuori portata o oltre i limiti degli assi.
 
 ## Uso rapido
 

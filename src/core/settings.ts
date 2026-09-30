@@ -114,6 +114,8 @@ export const DEFAULT_ROBOT: RobotSettings = {
   bedCenterX: 0,
   bedCenterY: 450,
   safeAxes: [0, -90, 90, 0, -1, 0],
-  baseData: [0, 1000, 0, 0, 0, 0],
+  // Robot at the Rhino world origin (point in BASE ROBOT.3dm, 32 mm below the table top), so
+  // BASE_DATA equals the offset used by CODICE PYTHON.txt.
+  baseData: [1448, -1000, 5, 0, 0, 0],
   toolData: [372.65, 0, 78.111, 0, 0, 0],
 };

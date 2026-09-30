@@ -37,25 +37,6 @@ export function robotRootInBase(r: RobotSettings): V3 {
   return mulMV(transpose(abcMatrix(a, b, c)), [-x, -y, -z]);
 }
 
-/**
- * Flange position in ROBROOT for a TCP point given in BASE:
- * TCP = BASE · p; R_tcp = R_base · R(A,B,C of the path); flange = TCP − R_flange · t_tool,
- * with R_flange = R_tcp · R_toolᵀ.
- */
-export function flangeInRoot(p: V3, r: RobotSettings): V3 {
-  const [bx, by, bz, ba, bb, bc] = r.baseData;
-  const Rb = abcMatrix(ba, bb, bc);
-  const tcp = mulMV(Rb, p);
-  tcp[0] += bx;
-  tcp[1] += by;
-  tcp[2] += bz;
-  const Rtcp = mulMM(Rb, abcMatrix(r.a, r.b, r.c));
-  const [tx, ty, tz, ta, tb, tc] = r.toolData;
-  const Rf = mulMM(Rtcp, transpose(abcMatrix(ta, tb, tc)));
-  const off = mulMV(Rf, [tx, ty, tz]);
-  return [tcp[0] - off[0], tcp[1] - off[1], tcp[2] - off[2]];
-}
-
 // ---------- KR16 R2010 kinematics ----------
 // Axes measured from the CAD links (home pose = KUKA A2 −90°, A3 +90°, flange along +X):
 // A1 vertical through the root, A2 at (160, 0, 520), A3 980 mm above A2, wrist centre at
@@ -179,12 +160,30 @@ export function inverseKinematics(R: M3, p: V3, prev?: Joints): Joints | null {
   return candidates.sort((x, y) => cost(x) - cost(y))[0];
 }
 
-/** Flange pose in the robot root frame for a TCP point given in BASE (full frame version of flangeInRoot). */
-export function flangeTarget(p: V3, r: RobotSettings): { R: M3; p: V3 } {
-  const [, , , ba, bb, bc] = r.baseData;
-  const Rtcp = mulMM(abcMatrix(ba, bb, bc), abcMatrix(r.a, r.b, r.c));
+/**
+ * The spindle works along the TCP Z axis (calibrated on the robot: A −180, B 0, C 180 = tool
+ * vertical, C tilts it — see "Riferimento orientamento utensile"). The KUKA flange has X out of
+ * the flange, so the TCP frame is the tool frame turned +90° about Y.
+ */
+const TOOL_AXIS = rotAxisY(90);
+function rotAxisY(d: number): M3 {
+  const c = Math.cos(rad(d));
+  const s = Math.sin(rad(d));
+  return [c, 0, s, 0, 1, 0, -s, 0, c];
+}
+function toolRotation(r: RobotSettings): M3 {
   const [, , , ta, tb, tc] = r.toolData;
-  return { R: mulMM(Rtcp, transpose(abcMatrix(ta, tb, tc))), p: flangeInRoot(p, r) };
+  return mulMM(abcMatrix(ta, tb, tc), TOOL_AXIS);
+}
+
+/** Flange pose in the robot root frame for a TCP point given in BASE. */
+export function flangeTarget(p: V3, r: RobotSettings): { R: M3; p: V3 } {
+  const [bx, by, bz, ba, bb, bc] = r.baseData;
+  const Rb = abcMatrix(ba, bb, bc);
+  const tcp = mulMV(Rb, p);
+  const Rf = mulMM(mulMM(Rb, abcMatrix(r.a, r.b, r.c)), transpose(toolRotation(r)));
+  const off = mulMV(Rf, [r.toolData[0], r.toolData[1], r.toolData[2]]);
+  return { R: Rf, p: [tcp[0] + bx - off[0], tcp[1] + by - off[1], tcp[2] + bz - off[2]] };
 }
 
 export const withinLimits = (q: Joints) => q.every((v, i) => v >= KR16.limits[i][0] - 1e-6 && v <= KR16.limits[i][1] + 1e-6);

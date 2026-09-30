@@ -77,6 +77,18 @@
           <p class="muted">Tutto il calcolo avviene nel browser: il file non viene inviato a nessun server.</p>
         </div>
         <div class="vp-tools" id="vpTools" hidden>
+          <div class="sim">
+            <button id="playBtn" class="primary small" title="Avvia / ferma la simulazione">▶ Simula</button>
+            <select id="simSpeed" title="Velocità della simulazione rispetto al robot reale">
+              <option value="1">1×</option>
+              <option value="5">5×</option>
+              <option value="20" selected>20×</option>
+              <option value="100">100×</option>
+              <option value="500">500×</option>
+            </select>
+            <input type="range" id="simSlider" min="0" max="0" value="0" aria-label="Movimento LIN" />
+          </div>
+          <div id="simReadout" class="sim-readout">–</div>
           <label>Strato <output id="layerOut">–</output>
             <input type="range" id="layerSlider" min="0" max="0" value="0" />
           </label>

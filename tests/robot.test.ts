@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { abcMatrix, flangeInRoot, reachReport, robotRootInBase } from '../src/core/robot';
+import { abcMatrix, flangeTarget, reachReport, robotRootInBase } from '../src/core/robot';
 import { DEFAULT_ROBOT } from '../src/core/settings';
 
 describe('robot frames', () => {
@@ -9,19 +9,26 @@ describe('robot frames', () => {
     expect(m[0]).toBeCloseTo(-1); // x·x
   });
 
-  it('places the flange 372.65 / 78.111 mm away from the nozzle', () => {
-    // BASE_DATA {0,1000,0}, TCP at BASE origin, tool pointing down.
-    const f = flangeInRoot([0, 0, 0], DEFAULT_ROBOT);
-    expect(f[0]).toBeCloseTo(372.65, 3);
-    expect(f[1]).toBeCloseTo(1000, 3);
-    expect(f[2]).toBeCloseTo(78.111, 3);
+  it('works vertically: at A-180 B0 C180 the flange is straight above the nozzle', () => {
+    // TCP at BASE origin; BASE is at (1448, -1000, 5) from the robot root.
+    const f = flangeTarget([0, 0, 0], DEFAULT_ROBOT);
+    expect(f.p[0]).toBeCloseTo(1448 - 78.111, 3);
+    expect(f.p[1]).toBeCloseTo(-1000, 3);
+    expect(f.p[2]).toBeCloseTo(5 + 372.65, 3);
+    // flange normal (KUKA flange X) points down, like the spindle
+    expect(f.R[6]).toBeCloseTo(-1, 6);
   });
 
-  it('robot root lies 1000 mm behind BASE along −Y', () => {
+  it('C tilts the spindle: C 90 lays it horizontal', () => {
+    const f = flangeTarget([0, 0, 0], { ...DEFAULT_ROBOT, c: 90 });
+    expect(Math.abs(f.R[6])).toBeLessThan(1e-9);
+  });
+
+  it('robot root sits 1448 / 1000 / 5 mm from BASE (Rhino world origin)', () => {
     const r = robotRootInBase(DEFAULT_ROBOT);
-    expect(r[0]).toBeCloseTo(0);
-    expect(r[1]).toBeCloseTo(-1000);
-    expect(r[2]).toBeCloseTo(0);
+    expect(r[0]).toBeCloseTo(-1448);
+    expect(r[1]).toBeCloseTo(1000);
+    expect(r[2]).toBeCloseTo(-5);
   });
 
   it('reports points out of reach', () => {

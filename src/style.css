@@ -207,3 +207,9 @@ button.active { background: var(--accent); color: var(--accent-ink); border-colo
 
 
 .piece-name { margin-top: 10px; font-weight: 600; }
+
+.sim { display: flex; align-items: center; gap: 8px; flex: 1 1 100%; }
+.sim input[type='range'] { flex: 1; }
+.sim select { font: inherit; font-size: 12.5px; color: var(--text); background: var(--bg); border: 1px solid var(--border); border-radius: 6px; padding: 3px 6px; }
+.sim-readout { flex: 1 1 100%; font-family: var(--mono); font-size: 11.5px; color: var(--text); white-space: pre-wrap; line-height: 1.5; }
+.sim-readout .bad { color: var(--danger); font-weight: 600; }
