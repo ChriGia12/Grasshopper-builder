@@ -5,8 +5,8 @@ import { densify, pointInPolygon, polylineLength, rotateToNearest, signedArea, s
 import type { PrintMode, PrintSettings } from './settings';
 import { cFromNormal, HeightField, topSurfacePasses, type SurfaceOptions, type SurfacePoint, type SurfaceRun } from './surface';
 import { sliceAt, type Contour, type Layer } from './slicer';
-import { buildWalls, collapseThinWalls, intersectContours, islands, offsetContours } from './walls';
-import { scanFill, serpentine, type Pass } from './zigzag';
+import { buildWalls, collapseThinWalls, islands, offsetContours } from './walls';
+import { scanFill, serpentine } from './zigzag';
 
 export interface PathPoint {
   x: number;
@@ -29,6 +29,8 @@ export interface Toolpath {
   travelLength: number; // mm
   travels: number;
   warnings: string[];
+  /** Solid serpentine: layers from this index on are blended (non-planar). */
+  planarLayers?: number;
 }
 
 export interface LayerSummary {
@@ -287,17 +289,6 @@ function segmentInside(a: Vec2, b: Vec2, region: Contour[]): boolean {
   return true;
 }
 
-/** Print one layer's serpentine of straight passes at height z, inside `region`. */
-function printPasses(tp: Toolpath, passes: Pass[], z: number, s: PrintSettings, cur: Vec2, region: Contour[] = []): Vec2 {
-  for (const [p, flip, link] of serpentine(passes, cur, (q, end) => q[end])) {
-    const [a, b] = flip ? [p.b, p.a] : [p.a, p.b];
-    moveTo(tp, a, z, s, undefined, link || region);
-    for (const q of densify([a, b], s.maxSegment, false).slice(1)) push(tp, { x: q[0], y: q[1], z, e: true });
-    cur = b;
-  }
-  return cur;
-}
-
 /** Print surface runs (non-planar) raised by dz, with optional C from the normal. */
 function printSurfaceRuns(tp: Toolpath, runs: SurfaceRun[], dz: number, s: PrintSettings, cur: Vec2): Vec2 {
   const end = (r: SurfaceRun, e: 'a' | 'b'): Vec2 => {
@@ -323,74 +314,155 @@ const surfaceOptions = (s: PrintSettings, k: number): SurfaceOptions => ({
   inset: s.wallSpacing / 2,
 });
 
+/** Height and tool tilt of a point of the current layer. */
+type ZAt = (x: number, y: number) => { z: number; c?: number } | null;
+
 /**
- * Solid part in serpentine. The body is printed in planar layers, each filled with parallel
- * passes one bead apart (optionally after the outline), island by island. With the top finish
- * on, each body layer is limited to where the part is still thicker than the finish above it —
- * the section at (bead top + finish thickness) — so the body stops below the top surface and
- * `surfacePasses` layers following the surface close the part, the last on the real top.
+ * Print a polyline at the heights given by `zAt`. Planar layers pass a constant height and the
+ * vertices are used as they are; blended (non-planar) layers are sampled every `step` mm along
+ * the line and simplified in the (distance, z) profile with the contour tolerance.
+ */
+function printLine(tp: Toolpath, line: Vec2[], zAt: ZAt, s: PrintSettings, step: number, link: boolean | Contour[]): Vec2 {
+  let pts: { p: Vec2; z: number; c?: number }[] = [];
+  const add = (p: Vec2) => {
+    const h = zAt(p[0], p[1]);
+    if (h) pts.push({ p, ...h });
+  };
+  if (step <= 0) line.forEach(add);
+  else {
+    add(line[0]);
+    for (let i = 1; i < line.length; i++) {
+      const [a, b] = [line[i - 1], line[i]];
+      const n = Math.max(1, Math.ceil(Math.hypot(b[0] - a[0], b[1] - a[1]) / step));
+      for (let k = 1; k <= n; k++) add([a[0] + ((b[0] - a[0]) * k) / n, a[1] + ((b[1] - a[1]) * k) / n]);
+    }
+    let d = 0;
+    const prof: Vec2[] = pts.map((q, i) => [(d += i ? Math.hypot(q.p[0] - pts[i - 1].p[0], q.p[1] - pts[i - 1].p[1]) : 0), q.z]);
+    const keep = new Set(simplifyOpen(prof, s.tolerance).map((k) => prof.indexOf(k)));
+    pts = pts.filter((_, i) => keep.has(i));
+  }
+  if (!pts.length) return line[line.length - 1];
+  moveTo(tp, pts[0].p, pts[0].z, s, pts[0].c, link);
+  for (const q of pts.slice(1)) push(tp, { x: q.p[0], y: q.p[1], z: q.z, e: true, c: q.c });
+  return pts[pts.length - 1].p;
+}
+
+/** Top surface height range over the part (faces flatter than the max slope). */
+function topRange(hf: HeightField, mesh: MeshData, s: PrintSettings): [number, number] | null {
+  const b = computeBounds(mesh);
+  const step = Math.max(1, s.wallSpacing / 2);
+  const minNz = Math.cos((s.surfaceMaxSlope * Math.PI) / 180);
+  let lo = Infinity;
+  let hi = -Infinity;
+  for (let x = b.min[0] + step / 2; x < b.max[0]; x += step)
+    for (let y = b.min[1] + step / 2; y < b.max[1]; y += step) {
+      const t = hf.top(x, y);
+      if (!t || t.n[2] < minNz) continue;
+      lo = Math.min(lo, t.z);
+      hi = Math.max(hi, t.z);
+    }
+  return lo <= hi ? [lo, hi] : null;
+}
+
+/**
+ * Solid part in serpentine, one continuous path per region from bottom to top.
+ *
+ * Planar layers are printed full (the whole section, no islands) up to a cut height below the
+ * lowest point of the top surface. With the top finish on, the rest is printed in N blended
+ * non-planar layers: layer k lies at zCut + (top − zCut)·k/N, so every layer still covers the
+ * whole section — only its thickness varies (≈ ½ to 1½ layer heights) — and the last one is
+ * the real top surface. A flat top needs no blended layers: the part is all planar.
  */
 function buildZigzag(tp: Toolpath, mesh: MeshData, layers: Layer[], s: PrintSettings, start: Vec2) {
   const h = s.layerHeight;
   const w = s.wallSpacing;
-  const top = s.fillTopSurface;
-  const zTop = computeBounds(mesh).max[2];
-  const shell = s.surfacePasses * h;
-  // Section of the part just under the finish: body material is allowed only inside it.
-  const beadTops = layers.map((l) => l.z + (h - s.firstLayerZ));
-  const upper = top ? sliceAt(mesh, beadTops.map((t) => Math.min(t + shell, zTop - 1e-3))) : [];
+  const squash = 1 - s.firstLayerZ / h; // nozzle sits this fraction of a layer below the bead top
+  const hf = s.fillTopSurface ? new HeightField(mesh) : null;
+  const range = hf ? topRange(hf, mesh, s) : null;
+  let n = 0;
+  let zCut = Infinity;
+  if (range && range[1] - range[0] > 0.25 * h) {
+    n = Math.ceil((range[1] - range[0]) / h);
+    zCut = Math.max(0, Math.floor((range[0] - 0.5 * h * n) / h + 1e-9) * h);
+    n = Math.max(n, Math.round((range[1] - zCut) / h / 1.5)); // keep the thickest spot ≤ ~1½ layers
+  }
   let cur: Vec2 = start;
   let prevAngle: number | null = null;
+  let printed = 0;
+  let lastRegion: Contour[] = layers[0]?.contours.filter((c) => c.closed) ?? [];
 
-  layers.forEach((layer, li) => {
-    tp.layerStart.push(tp.points.length);
-    let region = layer.contours.filter((c) => c.closed);
-    if (top) region = beadTops[li] + shell > zTop + 1e-6 ? [] : intersectContours(region, upper[li].contours);
-    // Islands smaller than ~3×3 beads cannot be filled: the top finish covers them.
-    const parts = islands(region).filter((g) => Math.abs(signedArea(g[0].pts)) >= 9 * w * w);
-    const fillRegionOf = (island: Contour[]) => (s.fillPerimeter ? offsetContours(island, -(s.walls - 0.5) * w) : island);
-    const fillOf = (island: Contour[], angle: number) => scanFill(fillRegionOf(island), w, angle, s.fillPerimeter ? w / 4 : w / 2);
-    // Pass direction: fixed (alternating 90° if asked) or automatic — the one of 0/45/90/135°
-    // whose serpentine breaks least on this layer (excluding the previous layer's direction
-    // when alternating, so layers still cross).
+  const fillRegionOf = (island: Contour[]) => (s.fillPerimeter ? offsetContours(island, -(s.walls - 0.5) * w) : island);
+  const fillOf = (island: Contour[], angle: number) => scanFill(fillRegionOf(island), w, angle, s.fillPerimeter ? w / 4 : w / 2);
+  // Pass direction: fixed (alternating 90° if asked) or automatic — the one of 0/45/90/135°
+  // whose serpentine breaks least (excluding the previous layer's direction when alternating).
+  const chooseAngle = (parts: Contour[][], li: number) => {
     let angle = passAngle(s, li);
     if (s.fillAutoAngle && parts.length) {
       const breaks = (a: number) =>
-        parts.reduce((n, g) => n + serpentine(fillOf(g, a), cur, (q, e) => q[e]).filter(([, , link], i) => i > 0 && !link).length, 0);
+        parts.reduce((m, g) => m + serpentine(fillOf(g, a), cur, (q, e) => q[e]).filter(([, , link], i) => i > 0 && !link).length, 0);
       const cands = [0, 45, 90, 135].map((a) => (s.fillAngle + a) % 180).filter((a) => !s.fillAlternate || prevAngle === null || a !== prevAngle);
       angle = cands.reduce((best, a) => (breaks(a) < breaks(best) ? a : best), cands[0]);
     }
     if (parts.length) prevAngle = angle;
+    return angle;
+  };
+
+  /** One layer: island by island, outline(s) then serpentine fill, all at heights from zAt. */
+  const printLayer = (region: Contour[], li: number, zAt: ZAt, step: number) => {
+    tp.layerStart.push(tp.points.length);
+    printed++;
+    // Islands smaller than ~3×3 beads cannot be filled.
+    const parts = islands(region).filter((g) => Math.abs(signedArea(g[0].pts)) >= 9 * w * w);
+    const angle = chooseAngle(parts, li);
     while (parts.length) {
       const island = parts.splice(nearestIndex(parts.map((p) => p[0]), cur), 1)[0];
-      if (s.fillPerimeter) {
+      if (s.fillPerimeter)
         for (const wall of buildWalls(island, s.walls, w)) {
           const pending = [...wall];
           while (pending.length) {
             const loop = prepareLoop(pending.splice(nearestIndex(pending, cur), 1)[0], s, cur);
-            moveTo(tp, loop[0], layer.z, s);
-            for (let i = 1; i < loop.length; i++) push(tp, { x: loop[i][0], y: loop[i][1], z: layer.z, e: true });
-            push(tp, { x: loop[0][0], y: loop[0][1], z: layer.z, e: true });
+            printLine(tp, [...loop, loop[0]], zAt, s, step, false);
             cur = loop[0];
           }
         }
+      // Passes keep half a bead from the region edge; with perimeters their ends overlap the
+      // perimeter bead by a quarter bead so the two fuse. Links inside the island are printed.
+      for (const [p, flip, link] of serpentine(fillOf(island, angle), cur, (q, e) => q[e])) {
+        const [a, b] = flip ? [p.b, p.a] : [p.a, p.b];
+        const line = step > 0 ? [a, b] : densify([a, b], s.maxSegment, false);
+        cur = printLine(tp, line, zAt, s, step, link || island);
       }
-      // Region edge = where material must end: the outline, or the inner edge of the innermost
-      // perimeter bead. Passes keep half a bead from it; with perimeters their ends overlap the
-      // perimeter bead by a quarter bead so the two fuse.
-      cur = printPasses(tp, fillOf(island, angle), layer.z, s, cur, island);
     }
+  };
+
+  layers.forEach((layer, li) => {
+    const beadTop = layer.z + (h - s.firstLayerZ);
+    if (beadTop > zCut + 1e-6) return;
+    const region = layer.contours.filter((c) => c.closed);
+    if (region.length) lastRegion = region;
+    printLayer(region, li, () => ({ z: layer.z }), 0);
   });
 
-  if (!top) return;
-  // Top finish: surfacePasses layers following the top surface; the last one is the real top.
-  const hf = new HeightField(mesh);
-  for (let k = 0; k < s.surfacePasses; k++) {
-    tp.layerStart.push(tp.points.length);
-    const dz = -(s.surfacePasses - 1 - k) * h - (h - s.firstLayerZ);
-    cur = printSurfaceRuns(tp, topSurfacePasses(mesh, surfaceOptions(s, layers.length + k), hf), dz, s, cur);
+  tp.planarLayers = printed;
+  if (n > 0 && hf) {
+    const step = Math.max(0.5, Math.min(2, w / 4));
+    for (let k = 1; k <= n; k++) {
+      const f = k / n;
+      const zAt: ZAt = (x, y) => {
+        const t = hf.top(x, y);
+        if (!t) return null;
+        const beadTop = zCut + (t.z - zCut) * f;
+        const thick = (t.z - zCut) / n;
+        // Normal of the blended layer: the top surface slope scaled by f.
+        const g = [(-t.n[0] / t.n[2]) * f, (-t.n[1] / t.n[2]) * f];
+        const len = Math.hypot(g[0], g[1], 1);
+        const c = s.surfaceTilt ? cFromNormal([-g[0] / len, -g[1] / len, 1 / len]) : undefined;
+        return { z: beadTop - thick * squash, c };
+      };
+      printLayer(lastRegion, layers.length + k, zAt, step);
+    }
   }
-  tp.layerCount = layers.length + s.surfacePasses;
+  tp.layerCount = printed;
 }
 
 /**

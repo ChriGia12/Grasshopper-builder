@@ -288,8 +288,8 @@ const PRINT_FIELDS: Field[] = [
   { key: 'fillAlternate', label: 'Alterna di 90° a ogni strato', kind: 'check', full: true },
   { key: 'fillAutoAngle', label: 'Pieno: direzione automatica (meno interruzioni)', kind: 'check', full: true },
   { key: 'fillPerimeter', label: 'Pieno: contorno esterno prima del riempimento', kind: 'check', full: true },
-  { key: 'fillTopSurface', label: 'Pieno: chiudi con la superficie superiore (non planare)', kind: 'check', full: true },
-  { key: 'surfacePasses', label: 'Strati sulla superficie superiore', kind: 'number', step: 1, min: 1 },
+  { key: 'fillTopSurface', label: 'Pieno: strati graduali fino alla superficie superiore (non planare)', kind: 'check', full: true },
+  { key: 'surfacePasses', label: 'Superficie: n° di strati', kind: 'number', step: 1, min: 1 },
   { key: 'surfaceMaxSlope', label: 'Superficie: pendenza max (°)', kind: 'number', step: 5, min: 1 },
   { key: 'surfaceTilt', label: 'Superficie: inclina utensile sulla normale (C)', kind: 'check', full: true },
   { group: 'Punto iniziale' },
@@ -498,8 +498,13 @@ function updateLayerLabel() {
   const n = currentMeta.layerStart.length;
   // Z of the layer in BASE (table top + nozzle height); the surface mode follows the part instead.
   const z = (lastBuild?.offset[2] ?? 0) + print.firstLayerZ + i * currentMeta.layerHeight;
+  const blended = currentMeta.planarLayers !== undefined && i >= currentMeta.planarLayers;
   $('layerOut').textContent =
-    currentMeta.mode === 'surface' ? `passata ${i + 1} / ${n}` : `${i + 1} / ${n} · Z ${z.toFixed(1)}`;
+    currentMeta.mode === 'surface'
+      ? `passata ${i + 1} / ${n}`
+      : blended
+        ? `${i + 1} / ${n} · graduale (non planare)`
+        : `${i + 1} / ${n} · Z ${z.toFixed(1)}`;
 }
 $<HTMLInputElement>('layerSlider').addEventListener('input', (e) => {
   const layer = +(e.target as HTMLInputElement).value;
