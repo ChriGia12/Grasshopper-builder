@@ -1,6 +1,6 @@
 // All user-tunable parameters. Robot defaults reproduce Tavolino1.src / CODICE PYTHON.txt.
 
-export type PrintMode = 'auto' | 'spiral' | 'planar';
+export type PrintMode = 'planar' | 'spiral';
 
 export interface PrintSettings {
   layerHeight: number; // mm
@@ -72,7 +72,7 @@ export const DEFAULT_PRINT: PrintSettings = {
   wallSpacing: 6,
   tolerance: 0.2,
   maxSegment: 0,
-  mode: 'auto',
+  mode: 'planar',
   minContourLength: 10,
   maxBridge: 8,
   travelLift: 10,

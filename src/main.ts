@@ -29,6 +29,7 @@ const save = (key: string, v: unknown) => {
 };
 
 const print: PrintSettings = load('gb.print', DEFAULT_PRINT);
+if ((print.mode as string) === 'auto') print.mode = 'planar'; // old saved setting
 const robot: RobotSettings = load('gb.robot', DEFAULT_ROBOT);
 // The cell is fixed (robot, table, controller frames): never take these from old saved settings.
 const CELL_KEYS = ['worldBaseX', 'worldBaseY', 'worldBaseZ', 'bedSizeX', 'bedSizeY', 'bedCenterX', 'bedCenterY', 'baseData', 'toolData'] as const;
@@ -266,9 +267,8 @@ const PRINT_FIELDS: Field[] = [
     kind: 'select',
     full: true,
     options: [
-      ['auto', 'Automatico (consigliato)'],
-      ['spiral', 'Spirale continua (vase mode)'],
-      ['planar', 'Strati planari'],
+      ['planar', 'Strati planari: Z fissa per strato, +altezza strato (come Tavolino1)'],
+      ['spiral', 'Spirale continua: Z sale lungo il giro (vase mode)'],
     ],
   },
   { key: 'layerHeight', label: 'Altezza strato (mm)', kind: 'number', step: 0.1, min: 0.1 },

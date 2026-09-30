@@ -64,7 +64,7 @@ describe('polyline', () => {
 describe('toolpath', () => {
   it('uses spiral mode for a single-contour vase', () => {
     const m = weld(cylinder(60, 40, 30));
-    const tp = buildToolpath(m, { ...DEFAULT_PRINT, layerHeight: 1.5, firstLayerZ: 1.5 });
+    const tp = buildToolpath(m, { ...DEFAULT_PRINT, mode: 'spiral', layerHeight: 1.5, firstLayerZ: 1.5 });
     expect(tp.mode).toBe('spiral');
     expect(tp.layerCount).toBe(20);
     expect(tp.travels).toBe(0);
@@ -85,12 +85,12 @@ describe('toolpath', () => {
 
   it('prints a thin hollow shell as one mid-line spiral', () => {
     const m = weld(tube(100, 96, 30));
-    const tp = buildToolpath(m, { ...DEFAULT_PRINT, layerHeight: 1.5, thinWallMax: 10 });
+    const tp = buildToolpath(m, { ...DEFAULT_PRINT, mode: 'spiral', layerHeight: 1.5, thinWallMax: 10 });
     expect(tp.mode).toBe('spiral');
     const r = Math.hypot(tp.points[5].x, tp.points[5].y);
     expect(r).toBeGreaterThan(97);
     expect(r).toBeLessThan(99);
-    const off = buildToolpath(m, { ...DEFAULT_PRINT, layerHeight: 1.5, thinWallMax: 0 });
+    const off = buildToolpath(m, { ...DEFAULT_PRINT, mode: 'spiral', layerHeight: 1.5, thinWallMax: 0 });
     expect(off.mode).toBe('planar');
   });
 

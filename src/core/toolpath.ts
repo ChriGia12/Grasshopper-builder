@@ -1,6 +1,6 @@
 // Turns slice contours into an ordered robot path (spiral / vase mode or planar layers).
 import { computeBounds, type MeshData } from './mesh';
-import { densify, polylineLength, rotateToNearest, simplifyClosed, simplifyOpen, type Vec2 } from './polyline';
+import { densify, polylineLength, rotateToNearest, signedArea, simplifyClosed, simplifyOpen, type Vec2 } from './polyline';
 import type { PrintSettings } from './settings';
 import { sliceAt, type Contour, type Layer } from './slicer';
 import { buildWalls, collapseThinWalls } from './walls';
@@ -47,6 +47,7 @@ export function sliceForPrint(mesh: MeshData, s: PrintSettings): LayerSummary {
     z: s.firstLayerZ + i * s.layerHeight,
     contours: collapseThinWalls(l.contours, s.thinWallMax).filter((c) => polylineLength(c.pts, c.closed) >= s.minContourLength),
   }));
+  fixEdgeSlivers(layers, s.wallSpacing / 2);
   let maxIslands = 0;
   let openLayers = 0;
   let emptyLayers = 0;
@@ -58,6 +59,23 @@ export function sliceForPrint(mesh: MeshData, s: PrintSettings): LayerSummary {
   }
   const spiral = spiralRange(layers);
   return { layers, singleLoop: spiral !== null, spiral, maxIslands, openLayers, emptyLayers };
+}
+
+/** Mean width of a closed loop's region (2·area / perimeter). */
+const loopWidth = (c: Contour) => (c.closed ? (2 * Math.abs(signedArea(c.pts))) / polylineLength(c.pts, true) : 0);
+
+/**
+ * Rounded bottoms and rims slice into slivers thinner than a bead (e.g. two half-rings at the
+ * first layer), which would print as scraps joined by lifted travels. The bottom layers take the
+ * contour of the first full layer, so printing starts with the whole footprint on the table
+ * (as Tavolino1 does); sliver layers at the top are dropped.
+ */
+function fixEdgeSlivers(layers: Layer[], minWidth: number) {
+  const sliver = (l: Layer) => l.contours.length > 0 && l.contours.every((c) => loopWidth(c) < minWidth);
+  const first = layers.findIndex((l) => l.contours.length > 0 && !sliver(l));
+  if (first < 0) return;
+  for (let i = 0; i < first; i++) layers[i].contours = layers[first].contours.map((c) => ({ ...c, pts: c.pts.map((p) => [...p] as Vec2) }));
+  while (layers.length > first + 1 && (sliver(layers[layers.length - 1]) || !layers[layers.length - 1].contours.length)) layers.pop();
 }
 
 const isSingleLoop = (l: Layer) => l.contours.length === 1 && l.contours[0].closed;
@@ -85,9 +103,9 @@ export function spiralRange(layers: Layer[]): [number, number] | null {
   return bestB - bestA + 1 >= Math.max(1, 0.9 * layers.length) ? [bestA, bestB] : null;
 }
 
+/** Planar layers (like Tavolino1) unless spiral is chosen explicitly and the part allows it. */
 export function resolveMode(summary: LayerSummary, s: PrintSettings): 'spiral' | 'planar' {
-  if (s.mode === 'planar') return 'planar';
-  return summary.singleLoop && s.walls === 1 ? 'spiral' : 'planar';
+  return s.mode === 'spiral' && summary.singleLoop && s.walls === 1 ? 'spiral' : 'planar';
 }
 
 export function buildToolpath(
