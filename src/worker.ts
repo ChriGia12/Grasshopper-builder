@@ -1,0 +1,38 @@
+// Heavy geometry runs here so the page stays responsive on million-triangle models.
+import { analyzeOrientations } from './core/orientation';
+import { runBuild } from './core/pipeline';
+import type { Mat3, MeshData } from './core/mesh';
+import type { PrintSettings, RobotSettings } from './core/settings';
+
+export type WorkerRequest =
+  | { type: 'analyze'; id: number; mesh: MeshData; print: PrintSettings }
+  | { type: 'build'; id: number; mesh: MeshData; matrix: Mat3; print: PrintSettings; robot: RobotSettings; sourceName: string };
+
+self.onmessage = (ev: MessageEvent<WorkerRequest>) => {
+  const req = ev.data;
+  try {
+    if (req.type === 'analyze') {
+      const orientations = analyzeOrientations(req.mesh, req.print.overhangAngle, req.print.layerHeight, req.print.thinWallMax);
+      self.postMessage({ type: 'analyze', id: req.id, orientations });
+    } else {
+      const r = runBuild(req.mesh, req.matrix, req.print, req.robot, req.sourceName);
+      // Flatten the path into typed arrays for a cheap transfer to the viewer.
+      const pts = r.toolpath.points;
+      const xyz = new Float32Array(pts.length * 3);
+      const ext = new Uint8Array(pts.length);
+      pts.forEach((p, i) => {
+        xyz[i * 3] = p.x;
+        xyz[i * 3 + 1] = p.y;
+        xyz[i * 3 + 2] = p.z;
+        ext[i] = p.e ? 1 : 0;
+      });
+      const meta = { ...r.toolpath, points: [] };
+      self.postMessage(
+        { type: 'build', id: req.id, xyz, ext, meta, src: r.src, offset: r.offset, mesh: r.mesh, min: r.min, max: r.max },
+        { transfer: [xyz.buffer, ext.buffer] },
+      );
+    }
+  } catch (e) {
+    self.postMessage({ type: 'error', id: req.id, message: e instanceof Error ? e.message : String(e) });
+  }
+};

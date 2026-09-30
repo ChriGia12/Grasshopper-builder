@@ -1,0 +1,93 @@
+<!doctype html>
+<html lang="it">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Grasshopper Builder</title>
+    <meta name="description" content="Da mesh o BREP a percorso di stampa 3D e file .src per robot KUKA" />
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Cpath d='M6 26h20M9 22h14M12 18h8M14 14h4M15.5 6v8' stroke='%2334c38f' stroke-width='3' stroke-linecap='round' fill='none'/%3E%3C/svg%3E" />
+  </head>
+  <body>
+    <header class="topbar">
+      <div class="brand">
+        <svg viewBox="0 0 32 32" width="22" height="22" aria-hidden="true"><path d="M6 26h20M9 22h14M12 18h8M14 14h4M15.5 6v8" stroke="currentColor" stroke-width="3" stroke-linecap="round" fill="none"/></svg>
+        <span>Grasshopper Builder</span>
+      </div>
+      <span class="tagline">mesh / BREP → percorso a contorno → KUKA .src</span>
+      <div id="busy" class="busy" hidden><span class="spinner"></span><span id="busyText">Calcolo…</span></div>
+    </header>
+
+    <main class="layout">
+      <aside class="panel" id="panel">
+        <section class="card" id="step-model">
+          <h2><span class="num">1</span>Modello</h2>
+          <label class="drop" id="drop">
+            <input type="file" id="file" hidden />
+            <strong>Trascina qui il file</strong>
+            <span>oppure clicca per sceglierlo</span>
+            <small>STL · OBJ · PLY · 3DM (Rhino) · STEP · IGES · BREP</small>
+          </label>
+          <div id="modelInfo" class="info" hidden></div>
+          <div id="parts" class="parts" hidden></div>
+          <ul id="modelNotes" class="notes"></ul>
+        </section>
+
+        <section class="card" id="step-orient" hidden>
+          <h2><span class="num">2</span>Orientamento</h2>
+          <p class="hint">Ordinate dalla migliore. Clicca per sceglierne un'altra.</p>
+          <ol id="orientList" class="orient-list"></ol>
+          <div class="row gap">
+            <span class="muted">Ruota a mano:</span>
+            <button class="ghost small" data-rot="x">X +90°</button>
+            <button class="ghost small" data-rot="y">Y +90°</button>
+            <button class="ghost small" data-rot="z">Z +90°</button>
+          </div>
+        </section>
+
+        <section class="card" id="step-print" hidden>
+          <h2><span class="num">3</span>Stampa</h2>
+          <div id="printFields" class="fields"></div>
+        </section>
+
+        <section class="card" id="step-robot" hidden>
+          <details>
+            <summary><h2><span class="num">4</span>Robot KUKA e piano</h2></summary>
+            <p class="hint">Valori iniziali presi da Tavolino1.src e dal post-processore Python. Restano salvati nel browser.</p>
+            <div id="robotFields" class="fields"></div>
+            <button class="ghost small" id="resetRobot">Ripristina valori Tavolino1</button>
+          </details>
+        </section>
+
+        <section class="card" id="step-out" hidden>
+          <h2><span class="num">5</span>Risultato</h2>
+          <div id="stats" class="stats"></div>
+          <ul id="warnings" class="warnings"></ul>
+          <div class="row gap">
+            <button id="download" class="primary">Scarica .src</button>
+            <button id="previewBtn" class="ghost">Anteprima codice</button>
+          </div>
+          <pre id="srcPreview" class="src-preview" hidden></pre>
+        </section>
+      </aside>
+
+      <section class="viewport-wrap">
+        <div id="viewport" class="viewport"></div>
+        <div id="empty" class="empty">
+          <p>Carica un modello per iniziare.</p>
+          <p class="muted">Tutto il calcolo avviene nel browser: il file non viene inviato a nessun server.</p>
+        </div>
+        <div class="vp-tools" id="vpTools" hidden>
+          <label>Strato <output id="layerOut">–</output>
+            <input type="range" id="layerSlider" min="0" max="0" value="0" />
+          </label>
+          <label>Modello
+            <input type="range" id="opacity" min="0" max="1" step="0.05" value="0.25" />
+          </label>
+          <button class="ghost small" id="fitBtn">Inquadra</button>
+          <div class="legend"><span class="sw grad"></span>stampa (basso → alto) <span class="sw travel"></span>spostamento senza estrusione</div>
+        </div>
+      </section>
+    </main>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

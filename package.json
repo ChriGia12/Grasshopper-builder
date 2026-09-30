@@ -1,0 +1,26 @@
+{
+  "name": "grasshopper-builder",
+  "version": "0.1.0",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc && vite build",
+    "preview": "vite preview",
+    "test": "vitest run",
+    "typecheck": "tsc"
+  },
+  "description": "Web app: mesh/BREP -> contour toolpath -> KUKA .src for robotic 3D printing",
+  "dependencies": {
+    "clipper-lib": "^6.4.2",
+    "three": "^0.186.1"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.3",
+    "@types/three": "^0.186.0",
+    "rhino3dm": "^8.35.0",
+    "typescript": "^7.0.2",
+    "vite": "^8.3.1",
+    "vitest": "^4.1.11"
+  },
+  "private": true,
+  "type": "module"
+}
