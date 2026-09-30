@@ -1,11 +1,11 @@
 // Turns the part into an ordered robot path: contour layers (planar or spiral / vase mode),
 // solid serpentine layers, or a non-planar serpentine over the top surface.
 import { computeBounds, type MeshData } from './mesh';
-import { densify, polylineLength, rotateToNearest, signedArea, simplifyClosed, simplifyOpen, type Vec2 } from './polyline';
+import { densify, pointInPolygon, polylineLength, rotateToNearest, signedArea, simplifyClosed, simplifyOpen, type Vec2 } from './polyline';
 import type { PrintMode, PrintSettings } from './settings';
 import { cFromNormal, HeightField, topSurfacePasses, type SurfaceOptions, type SurfacePoint, type SurfaceRun } from './surface';
 import { sliceAt, type Contour, type Layer } from './slicer';
-import { buildWalls, collapseThinWalls, offsetContours } from './walls';
+import { buildWalls, collapseThinWalls, intersectContours, islands, offsetContours } from './walls';
 import { scanFill, serpentine, type Pass } from './zigzag';
 
 export interface PathPoint {
@@ -177,14 +177,18 @@ function prepareLoop(c: Contour, s: PrintSettings, near: Vec2): Vec2[] {
 }
 
 /** Reach `to` either extruding (short hop, e.g. aligned seams between layers) or with a lifted travel. */
-function moveTo(tp: Toolpath, to: Vec2, z: number, s: PrintSettings, c?: number) {
+function moveTo(tp: Toolpath, to: Vec2, z: number, s: PrintSettings, c?: number, link: boolean | Contour[] = false) {
   const last = tp.points[tp.points.length - 1];
   if (!last) {
     push(tp, { x: to[0], y: to[1], z, e: false, c });
     return;
   }
   const hop = Math.hypot(to[0] - last.x, to[1] - last.y);
-  if (hop <= s.maxBridge) {
+  // `link`: connection inside the area being filled — true for the serpentine step to the
+  // neighbouring pass, or the island outline when the segment stays inside it. Printed up to
+  // 8 beads, so a sloped border or a branch of the fill does not stop the extruder.
+  const inside = Array.isArray(link) ? segmentInside([last.x, last.y], to, link) : link;
+  if (hop <= s.maxBridge || (inside && hop <= 8 * s.wallSpacing)) {
     push(tp, { x: to[0], y: to[1], z, e: true, c });
     return;
   }
@@ -271,40 +275,23 @@ function buildSpiral(tp: Toolpath, layers: Layer[], s: PrintSettings, start: Vec
 /** Pass direction of layer i: the chosen angle, turned 90° on every other layer if alternating. */
 const passAngle = (s: PrintSettings, i: number) => s.fillAngle + (s.fillAlternate && i % 2 ? 90 : 0);
 
-type Keep = (x: number, y: number) => boolean;
-
-/** Split a polyline where `keep` fails, sampling every `step` mm. */
-function clipPolyline(pts: Vec2[], keep: Keep, step: number): Vec2[][] {
-  const out: Vec2[][] = [];
-  let run: Vec2[] = [];
-  const flush = () => {
-    if (run.length >= 2) out.push(run);
-    run = [];
-  };
-  for (let i = 0; i < pts.length; i++) {
-    const a = pts[i];
-    if (i === 0) {
-      if (keep(a[0], a[1])) run.push(a);
-      continue;
-    }
-    const b = pts[i - 1];
-    const n = Math.max(1, Math.ceil(Math.hypot(a[0] - b[0], a[1] - b[1]) / step));
-    for (let k = 1; k <= n; k++) {
-      const q: Vec2 = [b[0] + ((a[0] - b[0]) * k) / n, b[1] + ((a[1] - b[1]) * k) / n];
-      if (keep(q[0], q[1])) {
-        if (k === n || !run.length) run.push(q);
-      } else flush();
-    }
+/** True when the segment a→b stays inside the region (even-odd over its loops), sampled every mm. */
+function segmentInside(a: Vec2, b: Vec2, region: Contour[]): boolean {
+  const n = Math.max(2, Math.ceil(Math.hypot(b[0] - a[0], b[1] - a[1])));
+  for (let k = 1; k < n; k++) {
+    const q: Vec2 = [a[0] + ((b[0] - a[0]) * k) / n, a[1] + ((b[1] - a[1]) * k) / n];
+    let inside = false;
+    for (const c of region) if (c.closed && pointInPolygon(q, c.pts)) inside = !inside;
+    if (!inside) return false;
   }
-  flush();
-  return out;
+  return true;
 }
 
-/** Print one layer's serpentine of straight passes at height z. */
-function printPasses(tp: Toolpath, passes: Pass[], z: number, s: PrintSettings, cur: Vec2): Vec2 {
-  for (const [p, flip] of serpentine(passes, cur, (q, end) => q[end])) {
+/** Print one layer's serpentine of straight passes at height z, inside `region`. */
+function printPasses(tp: Toolpath, passes: Pass[], z: number, s: PrintSettings, cur: Vec2, region: Contour[] = []): Vec2 {
+  for (const [p, flip, link] of serpentine(passes, cur, (q, end) => q[end])) {
     const [a, b] = flip ? [p.b, p.a] : [p.a, p.b];
-    moveTo(tp, a, z, s);
+    moveTo(tp, a, z, s, undefined, link || region);
     for (const q of densify([a, b], s.maxSegment, false).slice(1)) push(tp, { x: q[0], y: q[1], z, e: true });
     cur = b;
   }
@@ -317,10 +304,10 @@ function printSurfaceRuns(tp: Toolpath, runs: SurfaceRun[], dz: number, s: Print
     const q = e === 'a' ? r.pts[0] : r.pts[r.pts.length - 1];
     return [q.x, q.y];
   };
-  for (const [run, flip] of serpentine(runs, cur, end)) {
+  for (const [run, flip, link] of serpentine(runs, cur, end)) {
     const pts = flip ? [...run.pts].reverse() : run.pts;
     const cOf = (q: SurfacePoint) => (s.surfaceTilt ? cFromNormal(q.n) : undefined);
-    moveTo(tp, [pts[0].x, pts[0].y], pts[0].z + dz, s, cOf(pts[0]));
+    moveTo(tp, [pts[0].x, pts[0].y], pts[0].z + dz, s, cOf(pts[0]), link);
     for (const q of pts.slice(1)) push(tp, { x: q.x, y: q.y, z: q.z + dz, e: true, c: cOf(q) });
     cur = [pts[pts.length - 1].x, pts[pts.length - 1].y];
   }
@@ -338,63 +325,66 @@ const surfaceOptions = (s: PrintSettings, k: number): SurfaceOptions => ({
 
 /**
  * Solid part in serpentine. The body is printed in planar layers, each filled with parallel
- * passes one bead apart (optionally after the outline). With the top finish on, the body stops
- * below the top surface, leaving room for `surfacePasses` layers that follow the surface
- * (the same serpentine as the surface mode), the last one on the real top of the part.
+ * passes one bead apart (optionally after the outline), island by island. With the top finish
+ * on, each body layer is limited to where the part is still thicker than the finish above it —
+ * the section at (bead top + finish thickness) — so the body stops below the top surface and
+ * `surfacePasses` layers following the surface close the part, the last on the real top.
  */
 function buildZigzag(tp: Toolpath, mesh: MeshData, layers: Layer[], s: PrintSettings, start: Vec2) {
   const h = s.layerHeight;
   const w = s.wallSpacing;
-  const hf = s.fillTopSurface ? new HeightField(mesh) : null;
-  const shell = s.surfacePasses * h; // thickness left for the non-planar top layers
-  const step = Math.max(0.5, Math.min(2, w / 4));
+  const top = s.fillTopSurface;
+  const zTop = computeBounds(mesh).max[2];
+  const shell = s.surfacePasses * h;
+  // Section of the part just under the finish: body material is allowed only inside it.
+  const beadTops = layers.map((l) => l.z + (h - s.firstLayerZ));
+  const upper = top ? sliceAt(mesh, beadTops.map((t) => Math.min(t + shell, zTop - 1e-3))) : [];
   let cur: Vec2 = start;
+  let prevAngle: number | null = null;
 
   layers.forEach((layer, li) => {
     tp.layerStart.push(tp.points.length);
-    const closed = layer.contours.filter((c) => c.closed);
-    if (!closed.length) return;
-    const beadTop = layer.z + (h - s.firstLayerZ); // top of this layer's bead above the table
-    const keep: Keep = hf
-      ? (x, y) => {
-          const t = hf.top(x, y);
-          return !!t && t.z - beadTop >= shell - 1e-6;
-        }
-      : () => true;
-
-    if (s.fillPerimeter) {
-      for (const wall of buildWalls(closed, s.walls, w)) {
-        const pending = [...wall];
-        while (pending.length) {
-          const loop = prepareLoop(pending.splice(nearestIndex(pending, cur), 1)[0], s, cur);
-          const pieces = hf ? clipPolyline([...loop, loop[0]], keep, step) : [[...loop, loop[0]]];
-          for (const piece of pieces) {
-            const pts = hf ? simplifyOpen(piece, s.tolerance) : piece;
-            moveTo(tp, pts[0], layer.z, s);
-            for (const q of pts.slice(1)) push(tp, { x: q[0], y: q[1], z: layer.z, e: true });
-            cur = pts[pts.length - 1];
+    let region = layer.contours.filter((c) => c.closed);
+    if (top) region = beadTops[li] + shell > zTop + 1e-6 ? [] : intersectContours(region, upper[li].contours);
+    // Islands smaller than ~3×3 beads cannot be filled: the top finish covers them.
+    const parts = islands(region).filter((g) => Math.abs(signedArea(g[0].pts)) >= 9 * w * w);
+    const fillRegionOf = (island: Contour[]) => (s.fillPerimeter ? offsetContours(island, -(s.walls - 0.5) * w) : island);
+    const fillOf = (island: Contour[], angle: number) => scanFill(fillRegionOf(island), w, angle, s.fillPerimeter ? w / 4 : w / 2);
+    // Pass direction: fixed (alternating 90° if asked) or automatic — the one of 0/45/90/135°
+    // whose serpentine breaks least on this layer (excluding the previous layer's direction
+    // when alternating, so layers still cross).
+    let angle = passAngle(s, li);
+    if (s.fillAutoAngle && parts.length) {
+      const breaks = (a: number) =>
+        parts.reduce((n, g) => n + serpentine(fillOf(g, a), cur, (q, e) => q[e]).filter(([, , link], i) => i > 0 && !link).length, 0);
+      const cands = [0, 45, 90, 135].map((a) => (s.fillAngle + a) % 180).filter((a) => !s.fillAlternate || prevAngle === null || a !== prevAngle);
+      angle = cands.reduce((best, a) => (breaks(a) < breaks(best) ? a : best), cands[0]);
+    }
+    if (parts.length) prevAngle = angle;
+    while (parts.length) {
+      const island = parts.splice(nearestIndex(parts.map((p) => p[0]), cur), 1)[0];
+      if (s.fillPerimeter) {
+        for (const wall of buildWalls(island, s.walls, w)) {
+          const pending = [...wall];
+          while (pending.length) {
+            const loop = prepareLoop(pending.splice(nearestIndex(pending, cur), 1)[0], s, cur);
+            moveTo(tp, loop[0], layer.z, s);
+            for (let i = 1; i < loop.length; i++) push(tp, { x: loop[i][0], y: loop[i][1], z: layer.z, e: true });
+            push(tp, { x: loop[0][0], y: loop[0][1], z: layer.z, e: true });
+            cur = loop[0];
           }
         }
       }
+      // Region edge = where material must end: the outline, or the inner edge of the innermost
+      // perimeter bead. Passes keep half a bead from it; with perimeters their ends overlap the
+      // perimeter bead by a quarter bead so the two fuse.
+      cur = printPasses(tp, fillOf(island, angle), layer.z, s, cur, island);
     }
-    // Region edge = where material must end: the outline, or the inner edge of the innermost
-    // perimeter bead. Passes keep half a bead from it; with perimeters their ends overlap the
-    // perimeter bead by a quarter bead so the two fuse.
-    const region = s.fillPerimeter ? offsetContours(closed, -(s.walls - 0.5) * w) : closed;
-    let passes = scanFill(region, w, passAngle(s, li), s.fillPerimeter ? w / 4 : w / 2);
-    if (hf)
-      passes = passes.flatMap((p) =>
-        clipPolyline([p.a, p.b], keep, step).map((q) => {
-          const len = Math.hypot(p.b[0] - p.a[0], p.b[1] - p.a[1]) || 1;
-          const t = (v: Vec2) => p.lo + ((v[0] - p.a[0]) * (p.b[0] - p.a[0]) + (v[1] - p.a[1]) * (p.b[1] - p.a[1])) / len;
-          return { a: q[0], b: q[q.length - 1], line: p.line, lo: t(q[0]), hi: t(q[q.length - 1]) };
-        }),
-      );
-    cur = printPasses(tp, passes, layer.z, s, cur);
   });
 
-  if (!hf) return;
+  if (!top) return;
   // Top finish: surfacePasses layers following the top surface; the last one is the real top.
+  const hf = new HeightField(mesh);
   for (let k = 0; k < s.surfacePasses; k++) {
     tp.layerStart.push(tp.points.length);
     const dz = -(s.surfacePasses - 1 - k) * h - (h - s.firstLayerZ);

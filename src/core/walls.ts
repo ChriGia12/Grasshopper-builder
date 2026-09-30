@@ -58,3 +58,25 @@ export function collapseThinWalls(contours: Contour[], maxThickness: number): Co
   if (!used.size) return contours;
   return classify([...contours.filter((c) => !used.has(c)), ...out]);
 }
+
+/** Boolean intersection of two sets of closed contours (holes included). */
+export function intersectContours(a: Contour[], b: Contour[]): Contour[] {
+  const toPaths = (cs: Contour[]) =>
+    cs.filter((c) => c.closed).map((c) => c.pts.map(([x, y]) => ({ X: Math.round(x * SCALE), Y: Math.round(y * SCALE) })));
+  const clipper = new ClipperLib.Clipper();
+  clipper.AddPaths(toPaths(a), ClipperLib.PolyType.ptSubject, true);
+  clipper.AddPaths(toPaths(b), ClipperLib.PolyType.ptClip, true);
+  const out: { X: number; Y: number }[][] = [];
+  clipper.Execute(ClipperLib.ClipType.ctIntersection, out, ClipperLib.PolyFillType.pftEvenOdd, ClipperLib.PolyFillType.pftEvenOdd);
+  return classify(
+    out.filter((p) => p.length >= 3).map((p) => ({ pts: p.map((q) => [q.X / SCALE, q.Y / SCALE] as Vec2), closed: true, depth: 0 })),
+  );
+}
+
+/** Group classified loops into islands: each outer loop with the holes directly inside it. */
+export function islands(contours: Contour[]): Contour[][] {
+  const loops = contours.filter((c) => c.closed);
+  return loops
+    .filter((o) => o.depth % 2 === 0)
+    .map((o) => [o, ...loops.filter((h) => h.depth === o.depth + 1 && pointInPolygon(h.pts[0], o.pts))]);
+}

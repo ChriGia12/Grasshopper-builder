@@ -23,6 +23,7 @@ export interface PrintSettings {
   /** 'auto': start at the front-left of the part; 'point': start at the contour point nearest (startX, startY) in BASE. */
   fillAngle: number; // deg, direction of serpentine passes in plan
   fillAlternate: boolean; // turn passes 90° on every other layer / pass
+  fillAutoAngle: boolean; // zigzag: per layer, the direction (0/45/90/135° from fillAngle) with fewest breaks
   fillPerimeter: boolean; // zigzag: print the outline (walls) before filling
   fillTopSurface: boolean; // zigzag: finish with layers that follow the top surface (non-planar)
   surfacePasses: number; // surface: how many layers stacked on the top surface
@@ -92,6 +93,7 @@ export const DEFAULT_PRINT: PrintSettings = {
   thinWallMax: 10,
   fillAngle: 0,
   fillAlternate: true,
+  fillAutoAngle: true,
   fillPerimeter: true,
   fillTopSurface: true,
   surfacePasses: 1,

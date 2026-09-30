@@ -286,6 +286,7 @@ const PRINT_FIELDS: Field[] = [
   { group: 'Serpentina (pieno e superficie)' },
   { key: 'fillAngle', label: 'Direzione passate (°)', kind: 'number', step: 15 },
   { key: 'fillAlternate', label: 'Alterna di 90° a ogni strato', kind: 'check', full: true },
+  { key: 'fillAutoAngle', label: 'Pieno: direzione automatica (meno interruzioni)', kind: 'check', full: true },
   { key: 'fillPerimeter', label: 'Pieno: contorno esterno prima del riempimento', kind: 'check', full: true },
   { key: 'fillTopSurface', label: 'Pieno: chiudi con la superficie superiore (non planare)', kind: 'check', full: true },
   { key: 'surfacePasses', label: 'Strati sulla superficie superiore', kind: 'number', step: 1, min: 1 },

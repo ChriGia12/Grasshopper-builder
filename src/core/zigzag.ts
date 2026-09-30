@@ -68,11 +68,12 @@ const overlap = (p: OnLine, q: OnLine) => Math.min(p.hi, q.hi) - Math.max(p.lo, 
  * Order passes into a serpentine, like mowing a lawn: after a pass continue on the next scan
  * line with a pass that overlaps it (entering from the nearer end), keep going in the same
  * direction, and jump to a new area only when the current one is finished.
- * Returns [pass, reversed].
+ * Returns [pass, reversed, adjacent] — adjacent: reached from the neighbouring scan line of the
+ * same area, i.e. the connection is part of the serpentine and can be printed.
  */
-export function serpentine<T extends OnLine>(passes: T[], start: Vec2, endpoint: (p: T, end: 'a' | 'b') => Vec2): [T, boolean][] {
+export function serpentine<T extends OnLine>(passes: T[], start: Vec2, endpoint: (p: T, end: 'a' | 'b') => Vec2): [T, boolean, boolean][] {
   const pending = [...passes];
-  const out: [T, boolean][] = [];
+  const out: [T, boolean, boolean][] = [];
   let cur = start;
   let last: T | null = null;
   let dir = 0;
@@ -101,8 +102,9 @@ export function serpentine<T extends OnLine>(passes: T[], start: Vec2, endpoint:
       }
     }
     pending.splice(pending.indexOf(best), 1);
-    out.push([best, flip]);
-    dir = last && Math.abs(best.line - last.line) === 1 ? best.line - last.line : 0;
+    const adjacent = !!last && Math.abs(best.line - last.line) === 1 && overlap(best, last) > 0;
+    out.push([best, flip, adjacent]);
+    dir = adjacent ? best.line - last!.line : 0;
     last = best;
     cur = endpoint(best, flip ? 'a' : 'b');
   }
