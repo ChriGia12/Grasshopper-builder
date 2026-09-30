@@ -514,12 +514,13 @@ function resetSim(r: BuildMsg) {
   setSimIndex(n - 1);
 }
 
-function setSimIndex(i: number) {
+/** Jump to LIN i. `keepPos` keeps the fractional distance already travelled (used while playing). */
+function setSimIndex(i: number, keepPos = false) {
   if (!lastBuild) return;
   const r = lastBuild;
   const n = r.xyz.length / 3;
   simIndex = Math.max(0, Math.min(n - 1, i));
-  simPos = simCum[simIndex] ?? 0;
+  if (!keepPos) simPos = simCum[simIndex] ?? 0;
   $<HTMLInputElement>('simSlider').value = String(simIndex);
   viewer.showProgress(simIndex);
   const o = r.offset;
@@ -540,13 +541,13 @@ function stopSim() {
 
 function tick(t: number) {
   if (!playing || !lastBuild) return;
-  const dt = Math.min(0.1, (t - lastFrame) / 1000);
+  // rAF timestamps can precede the click time: never step backwards, cap long pauses.
+  const dt = Math.max(0, Math.min(0.1, (t - lastFrame) / 1000));
   lastFrame = t;
   simPos += dt * robot.velCP * 1000 * +$<HTMLSelectElement>('simSpeed').value;
   let i = simIndex;
   while (i < simCum.length - 1 && simCum[i + 1] <= simPos) i++;
-  setSimIndex(i);
-  simPos = Math.max(simPos, simCum[i]);
+  if (i !== simIndex) setSimIndex(i, true);
   if (i >= simCum.length - 1) stopSim();
   else requestAnimationFrame(tick);
 }
