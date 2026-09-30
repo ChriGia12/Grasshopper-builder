@@ -267,8 +267,10 @@ const PRINT_FIELDS: Field[] = [
     kind: 'select',
     full: true,
     options: [
-      ['planar', 'Strati planari: Z fissa per strato, +altezza strato (come Tavolino1)'],
-      ['spiral', 'Spirale continua: Z sale lungo il giro (vase mode)'],
+      ['planar', 'Contorno a strati: Z fissa per strato (come Tavolino1)'],
+      ['spiral', 'Contorno a spirale: Z sale lungo il giro (vase mode)'],
+      ['zigzag', 'Pieno a serpentina: ogni strato riempito a zig-zag'],
+      ['surface', 'Superficie superiore a serpentina (non planare)'],
     ],
   },
   { key: 'layerHeight', label: 'Altezza strato (mm)', kind: 'number', step: 0.1, min: 0.1 },
@@ -281,6 +283,14 @@ const PRINT_FIELDS: Field[] = [
   { key: 'travelLift', label: 'Sollevamento spost. (mm)', kind: 'number', step: 1, min: 0 },
   { key: 'overhangAngle', label: 'Sbalzo critico (°)', kind: 'number', step: 1, min: 1 },
   { key: 'thinWallMax', label: 'Guscio → linea media fino a (mm)', kind: 'number', step: 1, min: 0 },
+  { group: 'Serpentina (pieno e superficie)' },
+  { key: 'fillAngle', label: 'Direzione passate (°)', kind: 'number', step: 15 },
+  { key: 'fillAlternate', label: 'Alterna di 90° a ogni strato', kind: 'check', full: true },
+  { key: 'fillPerimeter', label: 'Pieno: contorno esterno prima del riempimento', kind: 'check', full: true },
+  { key: 'surfacePasses', label: 'Superficie: n° di strati', kind: 'number', step: 1, min: 1 },
+  { key: 'surfaceMaxSlope', label: 'Superficie: pendenza max (°)', kind: 'number', step: 5, min: 1 },
+  { key: 'surfaceTilt', label: 'Superficie: inclina utensile sulla normale (C)', kind: 'check', full: true },
+  { group: 'Punto iniziale' },
   {
     key: 'startMode',
     label: 'Punto iniziale',
@@ -431,6 +441,7 @@ $('resetRobot').onclick = () => {
 interface BuildMsg {
   xyz: Float32Array;
   ext: Uint8Array;
+  cc: Float32Array;
   meta: Toolpath;
   src: string;
   offset: [number, number, number];
@@ -482,7 +493,11 @@ async function build(): Promise<BuildMsg | null> {
 function updateLayerLabel() {
   if (!currentMeta) return;
   const i = +$<HTMLInputElement>('layerSlider').value;
-  $('layerOut').textContent = `${i + 1} / ${currentMeta.layerStart.length} · Z ${((i + 1) * currentMeta.layerHeight).toFixed(1)}`;
+  const n = currentMeta.layerStart.length;
+  // Z of the layer in BASE (table top + nozzle height); the surface mode follows the part instead.
+  const z = (lastBuild?.offset[2] ?? 0) + print.firstLayerZ + i * currentMeta.layerHeight;
+  $('layerOut').textContent =
+    currentMeta.mode === 'surface' ? `passata ${i + 1} / ${n}` : `${i + 1} / ${n} · Z ${z.toFixed(1)}`;
 }
 $<HTMLInputElement>('layerSlider').addEventListener('input', (e) => {
   const layer = +(e.target as HTMLInputElement).value;
@@ -525,12 +540,14 @@ function setSimIndex(i: number, keepPos = false) {
   viewer.showProgress(simIndex);
   const o = r.offset;
   const p: [number, number, number] = [r.xyz[simIndex * 3] + o[0], r.xyz[simIndex * 3 + 1] + o[1], r.xyz[simIndex * 3 + 2] + o[2]];
-  const q = poseAt(p, robot, robotPose);
+  const cPt = r.cc[simIndex];
+  const c = Number.isFinite(cPt) ? cPt : robot.c;
+  const q = poseAt(p, Number.isFinite(cPt) ? { ...robot, c } : robot, robotPose);
   if (q) showRobot(q);
   const f = (v: number) => v.toFixed(1);
   const move = r.ext[simIndex] ? 'stampa' : 'spostamento (estrusore spento)';
   $('simReadout').innerHTML =
-    `LIN ${simIndex + 1} / ${n} · ${move}\nX ${f(p[0])}  Y ${f(p[1])}  Z ${f(p[2])}  A ${robot.a}  B ${robot.b}  C ${robot.c}\n` +
+    `LIN ${simIndex + 1} / ${n} · ${move}\nX ${f(p[0])}  Y ${f(p[1])}  Z ${f(p[2])}  A ${robot.a}  B ${robot.b}  C ${f(c)}\n` +
     (q ? q.map((v, k) => `A${k + 1} ${v.toFixed(1)}°`).join('  ') : '<span class="bad">punto fuori portata del robot</span>');
 }
 
@@ -621,12 +638,14 @@ function renderStats(r: BuildMsg) {
   const t = r.meta;
   const seconds = (t.printLength + t.travelLength) / (robot.velCP * 1000) + t.travels * robot.extruderDelay;
   const kb = new Blob([r.src]).size / 1024;
+  const stops = t.travels ? ` ${t.travels} spostamenti con estrusore spento.` : ' Estrusore mai fermo.';
   const modeText =
-    t.mode === 'spiral'
-      ? 'Spirale continua — la Z sale lungo il contorno: nessuna giunzione, estrusore mai fermo.'
-      : t.travels
-        ? `Strati planari — ${t.travels} spostamenti con estrusore spento tra contorni separati.`
-        : 'Strati planari — cambio strato sulla stessa verticale senza fermare l’estrusore (come Tavolino1).';
+    {
+      spiral: 'Contorno a spirale — la Z sale lungo il contorno, nessuna giunzione.',
+      planar: 'Contorno a strati — Z fissa per strato, cambio strato sulla stessa verticale (come Tavolino1).',
+      zigzag: 'Pieno a serpentina — ogni strato riempito con passate a zig-zag.',
+      surface: 'Superficie superiore a serpentina — ogni punto segue l’altezza della superficie (non planare).',
+    }[t.mode] + stops;
   const items: [string, string, boolean?][] = [
     ['Modo scelto', modeText, true],
     ['Strati', `${t.layerCount}`],

@@ -64,7 +64,8 @@ export function runBuild(
 
   const basePts = new Float64Array(toolpath.points.length * 3);
   toolpath.points.forEach((p, i) => basePts.set([p.x + offset[0], p.y + offset[1], p.z + offset[2]], i * 3));
-  const reach = reachReport(basePts, robot);
+  const cs = Float64Array.from(toolpath.points, (p) => p.c ?? NaN);
+  const reach = reachReport(basePts, robot, cs);
   if (reach.unreachable)
     toolpath.warnings.push(`${reach.unreachable} punti fuori portata del robot con questo orientamento utensile: avvicina il pezzo al robot.`);
   if (reach.outOfLimits) toolpath.warnings.push(`${reach.outOfLimits} punti richiedono assi oltre i limiti del KR16.`);

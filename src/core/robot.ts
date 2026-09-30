@@ -197,11 +197,12 @@ export interface ReachReport {
 }
 
 /** Solve the arm pose for every path point (BASE coordinates, flat xyz array). */
-export function reachReport(pointsBase: ArrayLike<number>, r: RobotSettings): ReachReport {
+export function reachReport(pointsBase: ArrayLike<number>, r: RobotSettings, cs?: ArrayLike<number>): ReachReport {
   const rep: ReachReport = { unreachable: 0, outOfLimits: 0, jointMin: Array(6).fill(Infinity), jointMax: Array(6).fill(-Infinity), first: null };
   let prev: Joints | undefined;
   for (let i = 0; i < pointsBase.length; i += 3) {
-    const t = flangeTarget([pointsBase[i], pointsBase[i + 1], pointsBase[i + 2]], r);
+    const c = cs?.[i / 3];
+    const t = flangeTarget([pointsBase[i], pointsBase[i + 1], pointsBase[i + 2]], c !== undefined && Number.isFinite(c) ? { ...r, c } : r);
     const q = inverseKinematics(t.R, t.p, prev);
     if (!q) {
       rep.unreachable++;

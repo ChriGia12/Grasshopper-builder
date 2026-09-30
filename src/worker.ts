@@ -20,6 +20,7 @@ self.onmessage = (ev: MessageEvent<WorkerRequest>) => {
       const pts = r.toolpath.points;
       const xyz = new Float32Array(pts.length * 3);
       const ext = new Uint8Array(pts.length);
+      const cc = Float32Array.from(pts, (p) => p.c ?? NaN); // per-point tool tilt (surface mode)
       pts.forEach((p, i) => {
         xyz[i * 3] = p.x;
         xyz[i * 3 + 1] = p.y;
@@ -28,8 +29,8 @@ self.onmessage = (ev: MessageEvent<WorkerRequest>) => {
       });
       const meta = { ...r.toolpath, points: [] };
       self.postMessage(
-        { type: 'build', id: req.id, xyz, ext, meta, src: r.src, offset: r.offset, mesh: r.mesh, min: r.min, max: r.max, reach: r.reach },
-        { transfer: [xyz.buffer, ext.buffer] },
+        { type: 'build', id: req.id, xyz, ext, cc, meta, src: r.src, offset: r.offset, mesh: r.mesh, min: r.min, max: r.max, reach: r.reach },
+        { transfer: [xyz.buffer, ext.buffer, cc.buffer] },
       );
     }
   } catch (e) {

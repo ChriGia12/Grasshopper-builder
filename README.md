@@ -57,6 +57,15 @@ Il robot sta nell'origine del mondo Rhino (il punto disegnato in `BASE ROBOT.3dm
 - **Gusci sottili**: un solido cavo con spessore ≤ "Guscio → linea media" viene stampato con un solo cordolo sulla linea media (invece di pelle esterna + interna).
 - **Pareti multiple**: offset verso l'interno con Clipper.
 
+### Modi di stampa
+
+| Modo | Cosa fa |
+|---|---|
+| Contorno a strati | il contorno di ogni strato a Z costante, +altezza strato a ogni strato (come Tavolino1) |
+| Contorno a spirale | come sopra ma la Z sale lungo il giro (vase mode), senza giunzione |
+| Pieno a serpentina | ogni strato riempito con passate parallele a una larghezza cordolo, collegate a zig-zag; contorno esterno opzionale, direzione alternata di 90° tra gli strati |
+| Superficie superiore a serpentina | non planare: la serpentina segue la superficie superiore del pezzo (le facce più ripide di *pendenza max* sono fianchi e vengono escluse), mezzo cordolo dal bordo; più strati sovrapposti con *n° di strati*. Con *inclina utensile* il parametro C segue la normale (C = 180° − arccos(Nz), come nella calibrazione A −180 / B 0), altrimenti l'utensile resta verticale |
+
 ## Posizione sul robot
 
 Due modalità (sezione *Robot KUKA e piano*):

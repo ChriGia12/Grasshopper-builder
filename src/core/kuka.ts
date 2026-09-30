@@ -26,7 +26,7 @@ export function toBase(p: PathPoint, r: RobotSettings): [number, number, number]
 function frame(p: PathPoint, r: RobotSettings): string {
   const [x, y, z] = toBase(p, r);
   return (
-    `{X ${f3(x)}, Y ${f3(y)}, Z ${f3(z)}, A ${f3(r.a)}, B ${f3(r.b)}, C ${f3(r.c)}, ` +
+    `{X ${f3(x)}, Y ${f3(y)}, Z ${f3(z)}, A ${f3(r.a)}, B ${f3(r.b)}, C ${f3(p.c ?? r.c)}, ` +
     `E1 ${f3(r.e1)}, E2 ${f3(r.e2)}, E3 ${f3(r.e3)}, E4 ${f3(r.e4)}}`
   );
 }

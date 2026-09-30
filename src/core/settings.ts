@@ -1,6 +1,11 @@
 // All user-tunable parameters. Robot defaults reproduce Tavolino1.src / CODICE PYTHON.txt.
 
-export type PrintMode = 'planar' | 'spiral';
+/**
+ * planar: outline per layer, constant Z (Tavolino1) · spiral: outline with Z rising along the
+ * turn (vase mode) · zigzag: solid layers filled in serpentine · surface: serpentine over the
+ * top surface only, following its height (non-planar).
+ */
+export type PrintMode = 'planar' | 'spiral' | 'zigzag' | 'surface';
 
 export interface PrintSettings {
   layerHeight: number; // mm
@@ -16,6 +21,12 @@ export interface PrintSettings {
   overhangAngle: number; // deg from vertical considered critical
   thinWallMax: number; // mm, hollow shells up to this thickness print as one mid-line (0 = off)
   /** 'auto': start at the front-left of the part; 'point': start at the contour point nearest (startX, startY) in BASE. */
+  fillAngle: number; // deg, direction of serpentine passes in plan
+  fillAlternate: boolean; // turn passes 90° on every other layer / pass
+  fillPerimeter: boolean; // zigzag: print the outline (walls) before filling
+  surfacePasses: number; // surface: how many layers stacked on the top surface
+  surfaceMaxSlope: number; // surface: faces steeper than this (deg) are walls, not top
+  surfaceTilt: boolean; // surface: tilt the tool with C following the surface normal
   startMode: 'auto' | 'point';
   startX: number;
   startY: number;
@@ -78,6 +89,12 @@ export const DEFAULT_PRINT: PrintSettings = {
   travelLift: 10,
   overhangAngle: 45,
   thinWallMax: 10,
+  fillAngle: 0,
+  fillAlternate: true,
+  fillPerimeter: true,
+  surfacePasses: 1,
+  surfaceMaxSlope: 75,
+  surfaceTilt: false,
   startMode: 'auto',
   startX: 0,
   startY: 0,

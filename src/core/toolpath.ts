@@ -1,9 +1,12 @@
-// Turns slice contours into an ordered robot path (spiral / vase mode or planar layers).
+// Turns the part into an ordered robot path: contour layers (planar or spiral / vase mode),
+// solid serpentine layers, or a non-planar serpentine over the top surface.
 import { computeBounds, type MeshData } from './mesh';
 import { densify, polylineLength, rotateToNearest, signedArea, simplifyClosed, simplifyOpen, type Vec2 } from './polyline';
-import type { PrintSettings } from './settings';
+import type { PrintMode, PrintSettings } from './settings';
+import { cFromNormal, topSurfacePasses } from './surface';
 import { sliceAt, type Contour, type Layer } from './slicer';
-import { buildWalls, collapseThinWalls } from './walls';
+import { buildWalls, collapseThinWalls, offsetContours } from './walls';
+import { scanFill, serpentine } from './zigzag';
 
 export interface PathPoint {
   x: number;
@@ -11,11 +14,13 @@ export interface PathPoint {
   z: number;
   /** true when the move that reaches this point deposits material */
   e: boolean;
+  /** tool tilt C for this point (surface mode with tilt); otherwise the robot setting */
+  c?: number;
 }
 
 export interface Toolpath {
   points: PathPoint[];
-  mode: 'spiral' | 'planar';
+  mode: PrintMode;
   layerCount: number;
   layerHeight: number;
   /** index in `points` where each layer starts (for the viewer's layer slider) */
@@ -45,7 +50,10 @@ export function sliceForPrint(mesh: MeshData, s: PrintSettings): LayerSummary {
   const raw = sliceAt(mesh, zs);
   const layers = raw.map((l, i) => ({
     z: s.firstLayerZ + i * s.layerHeight,
-    contours: collapseThinWalls(l.contours, s.thinWallMax).filter((c) => polylineLength(c.pts, c.closed) >= s.minContourLength),
+    // A solid filled layer must keep its real outline: no shell → mid-line collapse there.
+    contours: collapseThinWalls(l.contours, s.mode === 'zigzag' ? 0 : s.thinWallMax).filter(
+      (c) => polylineLength(c.pts, c.closed) >= s.minContourLength,
+    ),
   }));
   fixEdgeSlivers(layers, s.wallSpacing / 2);
   let maxIslands = 0;
@@ -103,18 +111,22 @@ export function spiralRange(layers: Layer[]): [number, number] | null {
   return bestB - bestA + 1 >= Math.max(1, 0.9 * layers.length) ? [bestA, bestB] : null;
 }
 
-/** Planar layers (like Tavolino1) unless spiral is chosen explicitly and the part allows it. */
-export function resolveMode(summary: LayerSummary, s: PrintSettings): 'spiral' | 'planar' {
-  return s.mode === 'spiral' && summary.singleLoop && s.walls === 1 ? 'spiral' : 'planar';
+/** Spiral only when the part allows it; otherwise the chosen mode. */
+export function resolveMode(summary: LayerSummary, s: PrintSettings): PrintMode {
+  if (s.mode === 'spiral') return summary.singleLoop && s.walls === 1 ? 'spiral' : 'planar';
+  return s.mode;
 }
 
 export function buildToolpath(
   mesh: MeshData,
   s: PrintSettings,
-  summary = sliceForPrint(mesh, s),
+  summaryIn?: LayerSummary,
   /** Seam target in the mesh's own frame; defaults to the front-left corner. */
   startTarget?: Vec2,
 ): Toolpath {
+  const b0 = computeBounds(mesh);
+  if (s.mode === 'surface') return buildSurface(mesh, s, startTarget ?? [b0.min[0], b0.min[1]]);
+  const summary = summaryIn ?? sliceForPrint(mesh, s);
   const mode = resolveMode(summary, s);
   const warnings: string[] = [];
   if (s.mode === 'spiral' && mode !== 'spiral')
@@ -143,7 +155,8 @@ export function buildToolpath(
     buildPlanar(tp, summary.layers.slice(b + 1), s, cur);
     if (a > 0 || b < summary.layers.length - 1)
       warnings.push(`Spirale sugli strati ${a + 1}–${b + 1}; ${summary.layers.length - (b - a + 1)} strati di bordo stampati planari.`);
-  } else buildPlanar(tp, summary.layers, s, start);
+  } else if (mode === 'zigzag') buildZigzag(tp, summary.layers, s, start);
+  else buildPlanar(tp, summary.layers, s, start);
   return tp;
 }
 
@@ -164,22 +177,22 @@ function prepareLoop(c: Contour, s: PrintSettings, near: Vec2): Vec2[] {
 }
 
 /** Reach `to` either extruding (short hop, e.g. aligned seams between layers) or with a lifted travel. */
-function moveTo(tp: Toolpath, to: Vec2, z: number, s: PrintSettings) {
+function moveTo(tp: Toolpath, to: Vec2, z: number, s: PrintSettings, c?: number) {
   const last = tp.points[tp.points.length - 1];
   if (!last) {
-    push(tp, { x: to[0], y: to[1], z, e: false });
+    push(tp, { x: to[0], y: to[1], z, e: false, c });
     return;
   }
   const hop = Math.hypot(to[0] - last.x, to[1] - last.y);
   if (hop <= s.maxBridge) {
-    push(tp, { x: to[0], y: to[1], z, e: true });
+    push(tp, { x: to[0], y: to[1], z, e: true, c });
     return;
   }
   tp.travels++;
   const zUp = Math.max(last.z, z) + s.travelLift;
-  push(tp, { x: last.x, y: last.y, z: zUp, e: false });
-  push(tp, { x: to[0], y: to[1], z: zUp, e: false });
-  push(tp, { x: to[0], y: to[1], z, e: false });
+  push(tp, { x: last.x, y: last.y, z: zUp, e: false, c: last.c });
+  push(tp, { x: to[0], y: to[1], z: zUp, e: false, c });
+  push(tp, { x: to[0], y: to[1], z, e: false, c });
 }
 
 function nearestIndex(contours: Contour[], cur: Vec2): number {
@@ -253,4 +266,91 @@ function buildSpiral(tp: Toolpath, layers: Layer[], s: PrintSettings, start: Vec
     cur = loop[0];
   });
   return cur;
+}
+
+/** Pass direction of layer i: the chosen angle, turned 90° on every other layer if alternating. */
+const passAngle = (s: PrintSettings, i: number) => s.fillAngle + (s.fillAlternate && i % 2 ? 90 : 0);
+
+/**
+ * Solid layers: optional perimeter(s) on the outline, then the inside filled with parallel
+ * passes one bead apart, joined in a serpentine so the extruder never stops inside a region.
+ */
+function buildZigzag(tp: Toolpath, layers: Layer[], s: PrintSettings, start: Vec2) {
+  let cur: Vec2 = start;
+  layers.forEach((layer, li) => {
+    tp.layerStart.push(tp.points.length);
+    const closed = layer.contours.filter((c) => c.closed);
+    if (!closed.length) return;
+    if (s.fillPerimeter) {
+      for (const wall of buildWalls(closed, s.walls, s.wallSpacing)) {
+        const pending = [...wall];
+        while (pending.length) {
+          const loop = prepareLoop(pending.splice(nearestIndex(pending, cur), 1)[0], s, cur);
+          moveTo(tp, loop[0], layer.z, s);
+          for (let i = 1; i < loop.length; i++) push(tp, { x: loop[i][0], y: loop[i][1], z: layer.z, e: true });
+          push(tp, { x: loop[0][0], y: loop[0][1], z: layer.z, e: true });
+          cur = loop[0];
+        }
+      }
+    }
+    // Region edge = where the material must end: the outline itself, or the inner edge of the
+    // innermost perimeter bead. Passes keep half a bead from it; with perimeters their ends
+    // overlap the perimeter bead by a quarter bead so the two fuse.
+    const w = s.wallSpacing;
+    const region = s.fillPerimeter ? offsetContours(closed, -(s.walls - 0.5) * w) : closed;
+    const passes = scanFill(region, w, passAngle(s, li), s.fillPerimeter ? w / 4 : w / 2);
+    for (const [p, flip] of serpentine(passes, cur, (q, end) => q[end])) {
+      const [a, b] = flip ? [p.b, p.a] : [p.a, p.b];
+      moveTo(tp, a, layer.z, s);
+      for (const q of densify([a, b], s.maxSegment, false).slice(1)) push(tp, { x: q[0], y: q[1], z: layer.z, e: true });
+      cur = b;
+    }
+  });
+}
+
+/**
+ * Non-planar: serpentine over the top surface only. Every point takes the surface height
+ * (+ first-layer offset, + one layer height per extra pass); with tilt on, C follows the normal.
+ */
+function buildSurface(mesh: MeshData, s: PrintSettings, start: Vec2): Toolpath {
+  const tp: Toolpath = {
+    points: [],
+    mode: 'surface',
+    layerCount: s.surfacePasses,
+    layerHeight: s.layerHeight,
+    layerStart: [],
+    printLength: 0,
+    travelLength: 0,
+    travels: 0,
+    warnings: [],
+  };
+  let cur: Vec2 = start;
+  for (let k = 0; k < s.surfacePasses; k++) {
+    tp.layerStart.push(tp.points.length);
+    const dz = s.firstLayerZ + k * s.layerHeight;
+    const passes = topSurfacePasses(mesh, {
+      spacing: s.wallSpacing,
+      angle: passAngle(s, k),
+      maxSlope: s.surfaceMaxSlope,
+      tolerance: s.tolerance,
+      minLength: s.minContourLength,
+      inset: s.wallSpacing / 2,
+    });
+    if (!passes.length) {
+      tp.warnings.push('Nessuna superficie superiore trovata: controlla l\'orientamento del pezzo.');
+      break;
+    }
+    const end = (p: (typeof passes)[number], e: 'a' | 'b'): Vec2 => {
+      const q = e === 'a' ? p[0] : p[p.length - 1];
+      return [q.x, q.y];
+    };
+    for (const [pass, flip] of serpentine(passes, cur, end)) {
+      const pts = flip ? [...pass].reverse() : pass;
+      const cOf = (q: (typeof pts)[number]) => (s.surfaceTilt ? cFromNormal(q.n) : undefined);
+      moveTo(tp, [pts[0].x, pts[0].y], pts[0].z + dz, s, cOf(pts[0]));
+      for (const q of pts.slice(1)) push(tp, { x: q.x, y: q.y, z: q.z + dz, e: true, c: cOf(q) });
+      cur = [pts[pts.length - 1].x, pts[pts.length - 1].y];
+    }
+  }
+  return tp;
 }
