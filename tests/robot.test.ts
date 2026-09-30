@@ -24,10 +24,10 @@ describe('robot frames', () => {
     expect(r[2]).toBeCloseTo(0);
   });
 
-  it('flags points beyond the reach', () => {
-    const rep = reachReport([0, 500, 40, 0, 2000, 40], DEFAULT_ROBOT);
-    expect(rep.outOfReach).toBe(1);
-    expect(rep.maxRadius).toBeGreaterThan(3000);
+  it('reports points out of reach', () => {
+    const rep = reachReport([0, 500, 40, 0, 3000, 40], DEFAULT_ROBOT);
+    expect(rep.unreachable).toBe(1);
+    expect(rep.first).not.toBeNull();
   });
 });
 

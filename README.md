@@ -9,20 +9,29 @@ Sito web che sostituisce la catena Rhino/Grasshopper per la **stampa 3D robotica
 
 Tutto gira nel browser (TypeScript + Three.js + WebAssembly): il modello non viene caricato su nessun server.
 
+## Cella fissa
+
+All'apertura il sito mostra già la cella, che non si sposta e non si può eliminare:
+
+- **KUKA KR16 R2010** posato dalla cinematica reale (assi ricavati dal CAD: A2 a 160/520 mm, braccio 980 mm, avambraccio 150/860 mm, flangia a 153,9 mm dal polso);
+- **mandrino** montato sulla flangia: la sua punta coincide con `TOOL_DATA[11] = {X 372.65, Y 0, Z 78.111}`;
+- **tavole e lastra** di lavoro (piano di stampa a Z 38 nel sistema BASE, 640 × 1350 mm).
+
+La geometria viene da `BASE ROBOT.3dm` ed è salvata in `public/cell.bin` (≈2 MB). Per rigenerarla:
+
+```bash
+node scripts/build-cell.mjs "/percorso/BASE ROBOT.3dm"
+```
+
+Il robot è posizionato con i dati del controller: `BASE_DATA[1] = {X 0, Y 1000, Z 0}` rispetto alla base del robot, BASE in coordinate Rhino (1448, −1000, 5) come nel post-processore Python. Per ogni punto del percorso il sito risolve la cinematica inversa e segnala i punti fuori portata o oltre i limiti degli assi; lo slider degli strati muove il robot sull'ultimo punto visibile.
+
 ## Uso rapido
 
-1. **Carica il pezzo** (o più pezzi insieme: selezione multipla, trascinamento, "+ Aggiungi file"). Il robot KR16 e il piano di lavoro sono già nella cella: non vanno caricati.
-   Se carichi un `.3dm` con tutta la scena, il sito usa solo ciò che sta sul piano di lavoro (le coordinate mondo vengono convertite nel sistema BASE) e scarta cella, robot, duplicati.
+1. **Carica il pezzo**: una mesh o un BREP; un nuovo file sostituisce il precedente. Da un `.3dm` con tutta la scena viene preso solo l'oggetto che sta sul piano di lavoro.
 2. Il sito sceglie orientamento e modo di stampa.
-3. **Posiziona pezzo**: clicca sul piano nell'anteprima per spostare il centro del pezzo; la rotazione sul piano è in *Robot KUKA e piano → Rotazione pezzo Z*.
+3. **Posiziona pezzo**: clicca sulla lastra nell'anteprima per spostare il centro del pezzo; la rotazione sul piano è in *Robot KUKA e piano → Rotazione pezzo Z*.
 4. **Punto iniziale**: clicca vicino al contorno dove vuoi che parta la stampa (punto azzurro).
 5. **Scarica .src**.
-
-### Chat con Claude
-
-Il pulsante *Chat con Claude* apre una chat che modifica il progetto a parole ("inizia dall'angolo più vicino al robot", "sposta il pezzo 100 mm a sinistra", "strato da 2 mm", "stampalo capovolto"). Claude usa strumenti che leggono lo stato, cambiano le impostazioni, scelgono l'orientamento o ruotano il pezzo; dopo ogni modifica il percorso viene ricalcolato e Claude controlla il risultato (avvisi, sbraccio).
-
-Serve una **chiave API Anthropic** (console.anthropic.com): resta solo nel browser e viene inviata solo ad Anthropic; ogni messaggio consuma crediti API. Modello: Claude Opus 5.5, con fallback automatico lato server in caso di rifiuto.
 
 ## Formati supportati
 
@@ -48,11 +57,10 @@ Serve una **chiave API Anthropic** (console.anthropic.com): resta solo nel brows
 
 Due modalità (sezione *Robot KUKA e piano*):
 
-- **Centra sul punto indicato**: il centro del pezzo va in `X/Y` e il piano a `Z` nel sistema BASE (default 5 / 515 / 37 → prima Z 38,5 come Tavolino1).
+- **Centra sul punto indicato**: il centro del pezzo va in `X/Y` sul piano (Z 38 in BASE); la prima passata è 0,5 mm sopra il piano → Z 38,5 come Tavolino1.
 - **Mantieni posizione del file**: usa la posizione del pezzo nel file Rhino e sottrae l'origine della BASE in coordinate mondo (default 1448 / −1000 / 5, dal post-processore Python).
 
-**Dati del controller** (default della cella attuale): `BASE_DATA[1] = {X 0, Y 1000, Z 0, A 0, B 0, C 0}`, `TOOL_DATA[11] = {X 372.65, Y 0, Z 78.111, A 0, B 0, C 0}`, E1–E4 = 0.
-Servono per calcolare la posizione della flangia per ogni punto (offset estrusore compreso) e segnalare i punti oltre lo sbraccio del KR16 R2010 (limite impostabile, default 2010 mm dall'asse A1). Il robot e il cerchio di sbraccio sono mostrati nell'anteprima. I valori vengono scritti come commento nell'intestazione del `.src` per confronto con il controller; il programma usa comunque `BASE_DATA[n]`/`TOOL_DATA[n]` del controller.
+I dati del controller (`BASE_DATA[1]`, `TOOL_DATA[11]`, E1–E4 = 0) sono fissi e vengono scritti come commento nell'intestazione del `.src`; il programma usa comunque i valori salvati nel controller.
 
 Tutti i parametri restano salvati nel browser.
 
@@ -86,7 +94,8 @@ src/core/kuka.ts         writer KRL .src
 src/core/pipeline.ts     orientamento → percorso → .src
 src/worker.ts            calcolo in Web Worker
 src/viewer.ts            anteprima 3D, clic su piano
-src/chat.ts              chat con Claude (tool use)
-src/core/robot.ts        frame KUKA, flangia, sbraccio
+src/core/robot.ts        frame KUKA, cinematica diretta/inversa KR16
+scripts/build-cell.mjs   estrae robot, tavole e mandrino da BASE ROBOT.3dm
+public/cell.*            cella fissa
 src/main.ts              interfaccia
 ```

@@ -36,7 +36,7 @@ export interface LayerSummary {
   emptyLayers: number;
 }
 
-/** Slice at mid-bead height: nozzle at z = (i+1)·h, contour taken at z − h/2. */
+/** Contour taken at mid-bead height (i + ½)·h; nozzle at firstLayerZ + i·h above the table. */
 export function sliceForPrint(mesh: MeshData, s: PrintSettings): LayerSummary {
   const b = computeBounds(mesh);
   const height = b.max[2] - b.min[2];
@@ -44,7 +44,7 @@ export function sliceForPrint(mesh: MeshData, s: PrintSettings): LayerSummary {
   const zs = Array.from({ length: n }, (_, i) => b.min[2] + (i + 0.5) * s.layerHeight);
   const raw = sliceAt(mesh, zs);
   const layers = raw.map((l, i) => ({
-    z: (i + 1) * s.layerHeight,
+    z: s.firstLayerZ + i * s.layerHeight,
     contours: collapseThinWalls(l.contours, s.thinWallMax).filter((c) => polylineLength(c.pts, c.closed) >= s.minContourLength),
   }));
   let maxIslands = 0;

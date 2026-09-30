@@ -56,25 +56,177 @@ export function flangeInRoot(p: V3, r: RobotSettings): V3 {
   return [tcp[0] - off[0], tcp[1] - off[1], tcp[2] - off[2]];
 }
 
-export interface ReachReport {
-  minRadius: number; // horizontal distance of the flange from axis A1 (mm)
-  maxRadius: number;
-  minZ: number; // flange height in ROBROOT
-  maxZ: number;
-  outOfReach: number; // points with radius > maxReach
+// ---------- KR16 R2010 kinematics ----------
+// Axes measured from the CAD links (home pose = KUKA A2 −90°, A3 +90°, flange along +X):
+// A1 vertical through the root, A2 at (160, 0, 520), A3 980 mm above A2, wrist centre at
+// (1020, 0, 1650), flange 153.9 mm beyond the wrist.
+export const KR16 = {
+  a1: 160,
+  d1: 520,
+  a2: 980,
+  a3: 150, // A3 → A4 axis vertical offset
+  d4: 860, // A3 → wrist centre along the forearm
+  d6: 153.9, // wrist centre → flange
+  flangeHome: [1173.9, 0, 1650] as V3,
+  /** approximate KR16 R2010-2 software limits (deg) */
+  limits: [
+    [-185, 185],
+    [-185, 65],
+    [-138, 175],
+    [-350, 350],
+    [-130, 130],
+    [-350, 350],
+  ] as [number, number][],
+};
+
+export type Joints = [number, number, number, number, number, number];
+type Mat4 = number[]; // row-major 4×4
+
+const rotAxis = (axis: 'x' | 'y' | 'z', deg: number): M3 => {
+  const c = Math.cos(rad(deg));
+  const s = Math.sin(rad(deg));
+  if (axis === 'x') return [1, 0, 0, 0, c, -s, 0, s, c];
+  if (axis === 'y') return [c, 0, s, 0, 1, 0, -s, 0, c];
+  return [c, -s, 0, s, c, 0, 0, 0, 1];
+};
+const mat4 = (R: M3, t: V3): Mat4 => [R[0], R[1], R[2], t[0], R[3], R[4], R[5], t[1], R[6], R[7], R[8], t[2], 0, 0, 0, 1];
+const mul4 = (a: Mat4, b: Mat4): Mat4 => {
+  const r = new Array(16).fill(0);
+  for (let i = 0; i < 4; i++) for (let j = 0; j < 4; j++) for (let k = 0; k < 4; k++) r[i * 4 + j] += a[i * 4 + k] * b[k * 4 + j];
+  return r;
+};
+/** Rotation about an axis through point p. */
+const rotAbout = (axis: 'x' | 'y' | 'z', deg: number, p: V3): Mat4 => {
+  const R = rotAxis(axis, deg);
+  const Rp = mulMV(R, p);
+  return mat4(R, [p[0] - Rp[0], p[1] - Rp[1], p[2] - Rp[2]]);
+};
+
+/**
+ * Forward kinematics: transform of each link (BASE, A1…A6) from its home-pose geometry to the
+ * robot root frame. KUKA sign conventions: A1 about −Z, A2/A3/A5 about +Y, A4/A6 about −X.
+ */
+export function linkTransforms(q: Joints): Mat4[] {
+  const k = KR16;
+  const zw = k.d1 + k.a2 + k.a3;
+  const steps: Mat4[] = [
+    rotAbout('z', -q[0], [0, 0, 0]),
+    rotAbout('y', q[1] + 90, [k.a1, 0, k.d1]),
+    rotAbout('y', q[2] - 90, [k.a1, 0, k.d1 + k.a2]),
+    rotAbout('x', -q[3], [0, 0, zw]),
+    rotAbout('y', q[4], [k.a1 + k.d4, 0, zw]),
+    rotAbout('x', -q[5], [0, 0, zw]),
+  ];
+  const out: Mat4[] = [mat4([1, 0, 0, 0, 1, 0, 0, 0, 1], [0, 0, 0])];
+  let T = out[0];
+  for (const s of steps) {
+    T = mul4(T, s);
+    out.push(T);
+  }
+  return out;
 }
 
-/** Approximate reach check (flange distance from A1), until the full kinematics is modelled. */
+/** Flange pose (rotation, position) in the robot root frame. */
+export function flangePose(q: Joints): { R: M3; p: V3 } {
+  const T = linkTransforms(q)[6];
+  const f = KR16.flangeHome;
+  return {
+    R: [T[0], T[1], T[2], T[4], T[5], T[6], T[8], T[9], T[10]],
+    p: [T[0] * f[0] + T[1] * f[1] + T[2] * f[2] + T[3], T[4] * f[0] + T[5] * f[1] + T[6] * f[2] + T[7], T[8] * f[0] + T[9] * f[1] + T[10] * f[2] + T[11]],
+  };
+}
+
+const deg = (r: number) => (r * 180) / Math.PI;
+const wrap = (a: number) => ((((a + 180) % 360) + 360) % 360) - 180;
+
+/** Analytic inverse kinematics (elbow up, no flip); null when the pose is out of reach. */
+export function inverseKinematics(R: M3, p: V3, prev?: Joints): Joints | null {
+  const k = KR16;
+  const w: V3 = [p[0] - k.d6 * R[0], p[1] - k.d6 * R[3], p[2] - k.d6 * R[6]];
+  const q1 = -deg(Math.atan2(w[1], w[0]));
+  const r = Math.hypot(w[0], w[1]) - k.a1;
+  const z = w[2] - k.d1;
+  const L3 = Math.hypot(k.d4, k.a3);
+  const kk = (r * r + z * z - k.a2 * k.a2 - L3 * L3) / (2 * k.a2);
+  if (Math.abs(kk) > L3) return null;
+  const delta = Math.atan2(k.d4, k.a3);
+  const b = Math.acos(kk / L3) - delta; // A3 − 90°
+  // v = upper arm + rotated forearm, in the arm plane (r forward, z up)
+  const vr = k.d4 * Math.cos(b) + k.a3 * Math.sin(b);
+  const vz = k.a2 - k.d4 * Math.sin(b) + k.a3 * Math.cos(b);
+  const a = Math.atan2(r, z) - Math.atan2(vr, vz); // A2 + 90°
+  const q2 = deg(a) - 90;
+  const q3 = deg(b) + 90;
+  // Wrist: R = Rz(−q1)·Ry(a+b)·Rx(−q4)·Ry(q5)·Rx(−q6)
+  const R03 = mulMM(rotAxis('z', -q1), rotAxis('y', deg(a + b)));
+  const m = mulMM(transpose(R03), R);
+  const candidates: Joints[] = [];
+  for (const sign of [1, -1]) {
+    const beta = sign * Math.acos(Math.max(-1, Math.min(1, m[0])));
+    const sb = Math.sin(beta);
+    let alpha = 0;
+    let gamma = 0;
+    if (Math.abs(sb) > 1e-6) {
+      alpha = Math.atan2(m[3] / sb, -m[6] / sb);
+      gamma = Math.atan2(m[1] / sb, m[2] / sb);
+    } else {
+      alpha = prev ? -rad(prev[3]) : 0;
+      gamma = Math.atan2(-m[5], m[4]) - alpha;
+    }
+    candidates.push([q1, q2, q3, wrap(-deg(alpha)), deg(beta), wrap(-deg(gamma))]);
+  }
+  const cost = (c: Joints) => (prev ? c.reduce((s, v, i) => s + Math.abs(v - prev[i]), 0) : Math.abs(c[3]) + Math.abs(c[5]));
+  return candidates.sort((x, y) => cost(x) - cost(y))[0];
+}
+
+/** Flange pose in the robot root frame for a TCP point given in BASE (full frame version of flangeInRoot). */
+export function flangeTarget(p: V3, r: RobotSettings): { R: M3; p: V3 } {
+  const [, , , ba, bb, bc] = r.baseData;
+  const Rtcp = mulMM(abcMatrix(ba, bb, bc), abcMatrix(r.a, r.b, r.c));
+  const [, , , ta, tb, tc] = r.toolData;
+  return { R: mulMM(Rtcp, transpose(abcMatrix(ta, tb, tc))), p: flangeInRoot(p, r) };
+}
+
+export const withinLimits = (q: Joints) => q.every((v, i) => v >= KR16.limits[i][0] - 1e-6 && v <= KR16.limits[i][1] + 1e-6);
+
+export interface ReachReport {
+  unreachable: number; // points the arm cannot reach with the tool orientation
+  outOfLimits: number; // reachable, but some axis beyond its limits
+  jointMin: number[];
+  jointMax: number[];
+  first: Joints | null; // pose at the first point, for the viewer
+}
+
+/** Solve the arm pose for every path point (BASE coordinates, flat xyz array). */
 export function reachReport(pointsBase: ArrayLike<number>, r: RobotSettings): ReachReport {
-  const rep: ReachReport = { minRadius: Infinity, maxRadius: 0, minZ: Infinity, maxZ: -Infinity, outOfReach: 0 };
+  const rep: ReachReport = { unreachable: 0, outOfLimits: 0, jointMin: Array(6).fill(Infinity), jointMax: Array(6).fill(-Infinity), first: null };
+  let prev: Joints | undefined;
   for (let i = 0; i < pointsBase.length; i += 3) {
-    const f = flangeInRoot([pointsBase[i], pointsBase[i + 1], pointsBase[i + 2]], r);
-    const d = Math.hypot(f[0], f[1]);
-    rep.minRadius = Math.min(rep.minRadius, d);
-    rep.maxRadius = Math.max(rep.maxRadius, d);
-    rep.minZ = Math.min(rep.minZ, f[2]);
-    rep.maxZ = Math.max(rep.maxZ, f[2]);
-    if (d > r.maxReach) rep.outOfReach++;
+    const t = flangeTarget([pointsBase[i], pointsBase[i + 1], pointsBase[i + 2]], r);
+    const q = inverseKinematics(t.R, t.p, prev);
+    if (!q) {
+      rep.unreachable++;
+      continue;
+    }
+    if (!rep.first) rep.first = q;
+    if (!withinLimits(q)) rep.outOfLimits++;
+    q.forEach((v, k) => {
+      rep.jointMin[k] = Math.min(rep.jointMin[k], v);
+      rep.jointMax[k] = Math.max(rep.jointMax[k], v);
+    });
+    prev = q;
   }
   return rep;
+}
+
+/** Robot root frame expressed in BASE: origin and rotation (row-major), for drawing the arm. */
+export function robotRootFrame(r: RobotSettings): { p: V3; R: M3 } {
+  const [, , , a, b, c] = r.baseData;
+  return { p: robotRootInBase(r), R: transpose(abcMatrix(a, b, c)) };
+}
+
+/** Arm pose that puts the TCP on a BASE point (null if unreachable). */
+export function poseAt(pBase: V3, r: RobotSettings, prev?: Joints): Joints | null {
+  const t = flangeTarget(pBase, r);
+  return inverseKinematics(t.R, t.p, prev);
 }

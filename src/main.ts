@@ -1,14 +1,13 @@
 import './style.css';
 import { ACCEPTED, combineParts, loadModel, pickPieces, type CellRegion } from './core/loaders';
 import { sanitizeProgramName } from './core/kuka';
-import { IDENTITY, dropToOrigin, mergeMeshes, orientOutward, translate, weld, meshStats, mulMat3, rotX, rotY, rotZ, type Mat3, type MeshData } from './core/mesh';
+import { IDENTITY, dropToOrigin, meshStats, mulMat3, rotX, rotY, rotZ, type Mat3, type MeshData } from './core/mesh';
 import type { OrientationCandidate } from './core/orientation';
 import { placementOffset } from './core/pipeline';
-import { robotRootInBase, type ReachReport } from './core/robot';
+import { KR16, linkTransforms, poseAt, robotRootFrame, type Joints, type ReachReport } from './core/robot';
 import { DEFAULT_PRINT, DEFAULT_ROBOT, type PrintSettings, type RobotSettings } from './core/settings';
 import type { Toolpath } from './core/toolpath';
 import { Viewer } from './viewer';
-import { mountChat } from './chat';
 import type { WorkerRequest } from './worker';
 
 // ---------- state ----------
@@ -31,6 +30,17 @@ const save = (key: string, v: unknown) => {
 
 const print: PrintSettings = load('gb.print', DEFAULT_PRINT);
 const robot: RobotSettings = load('gb.robot', DEFAULT_ROBOT);
+// The cell is fixed (robot, table, controller frames): never take these from old saved settings.
+const CELL_KEYS = ['worldBaseX', 'worldBaseY', 'worldBaseZ', 'bedSizeX', 'bedSizeY', 'bedCenterX', 'bedCenterY', 'baseData', 'toolData'] as const;
+for (const k of CELL_KEYS) (robot as unknown as Record<string, unknown>)[k] = structuredClone(DEFAULT_ROBOT[k]);
+try {
+  if (localStorage.getItem('gb.cellVersion') !== '2') {
+    robot.originZ = DEFAULT_ROBOT.originZ; // table top moved from a guess (37) to the measured plate (38)
+    localStorage.setItem('gb.cellVersion', '2');
+  }
+} catch {
+  /* storage unavailable: defaults already apply */
+}
 
 let sourceName = '';
 let mesh: MeshData | null = null;
@@ -98,36 +108,20 @@ async function busy<T>(text: string, fn: () => Promise<T>): Promise<T> {
   }
 }
 
-// ---------- step 1: pieces ----------
-// The robot cell is fixed; the user only brings the piece(s). Each file becomes one piece
-// (a whole Rhino scene is reduced to what stands on the work table).
+// ---------- step 1: the piece ----------
+// Robot, table and mandrino are fixed in the cell; the user only brings one piece
+// (a mesh or a BREP). A new file replaces the previous one. A whole Rhino scene is
+// reduced to the object standing on the work table.
 
-interface Piece {
-  id: number;
-  file: string;
-  label: string;
-  format: string;
-  mesh: MeshData;
-}
-
-let pieces: Piece[] = [];
+let pieceFormat = '';
 let pieceNotes: string[] = [];
-let nextPieceId = 1;
 
 const fileInput = $<HTMLInputElement>('file');
 fileInput.accept = ACCEPTED;
-fileInput.multiple = true;
-const addInput = $<HTMLInputElement>('addFile');
-addInput.accept = ACCEPTED;
-addInput.multiple = true;
 const drop = $('drop');
 fileInput.addEventListener('change', () => {
-  if (fileInput.files?.length) openFiles([...fileInput.files], false);
+  if (fileInput.files?.[0]) openFile(fileInput.files[0]);
   fileInput.value = '';
-});
-addInput.addEventListener('change', () => {
-  if (addInput.files?.length) openFiles([...addInput.files], true);
-  addInput.value = '';
 });
 drop.addEventListener('dragover', (e) => {
   e.preventDefault();
@@ -137,102 +131,43 @@ drop.addEventListener('dragleave', () => drop.classList.remove('over'));
 drop.addEventListener('drop', (e) => {
   e.preventDefault();
   drop.classList.remove('over');
-  const files = [...(e.dataTransfer?.files ?? [])];
-  if (files.length) openFiles(files, pieces.length > 0 && e.shiftKey);
+  const f = e.dataTransfer?.files[0];
+  if (f) openFile(f);
 });
 
 function setNotes(notes: string[], error?: string) {
   $('modelNotes').replaceChildren(...notes.map((n) => li(n)), ...(error ? [li(error, 'error')] : []));
 }
 
-async function openFiles(files: File[], append: boolean) {
-  const loaded: Piece[] = [];
-  const notes: string[] = [];
+async function openFile(file: File) {
   const cell: CellRegion = {
     worldBase: [robot.worldBaseX, robot.worldBaseY, robot.worldBaseZ],
     bedCenter: [robot.bedCenterX, robot.bedCenterY],
     bedSize: [robot.bedSizeX, robot.bedSizeY],
   };
-  for (const file of files) {
-    try {
-      const model = await busy(`Lettura ${file.name}…`, () => loadModel(file));
-      const { parts, note } = pickPieces(model, cell);
-      if (note) notes.push(`${file.name}: ${note}`);
-      if (!parts.length) continue;
-      loaded.push({
-        id: nextPieceId++,
-        file: file.name,
-        label: parts.length === 1 && parts[0].name ? parts[0].name : file.name,
-        format: model.format,
-        mesh: combineParts(parts),
-      });
-      notes.push(...model.notes.filter((n) => !/ignorati/.test(n)).map((n) => `${file.name}: ${n}`));
-    } catch (e) {
-      notes.push(`${file.name}: ${e instanceof Error ? e.message : String(e)}`);
-    }
-  }
-  if (!loaded.length) {
-    setNotes(notes, 'Nessun pezzo caricato.');
+  let piece: MeshData;
+  const notes: string[] = [];
+  try {
+    const model = await busy(`Lettura ${file.name}…`, () => loadModel(file));
+    const { parts, note } = pickPieces(model, cell);
+    if (note) notes.push(note);
+    if (!parts.length) throw new Error(note ?? 'Nessun oggetto stampabile nel file.');
+    piece = combineParts(parts);
+    notes.push(...model.notes.filter((n) => !/ignorati/.test(n)));
+    pieceFormat = model.format;
+  } catch (e) {
+    setNotes(notes, e instanceof Error ? e.message : String(e));
     return;
   }
-  pieces = append ? [...pieces, ...loaded] : loaded;
-  pieceNotes = append ? [...pieceNotes, ...notes] : notes;
-  sourceName = pieces.map((p) => p.file).join(' + ');
-  robot.programName = sanitizeProgramName(pieces[0].file);
+  pieceNotes = notes;
+  sourceName = file.name;
+  robot.programName = sanitizeProgramName(file.name);
   save('gb.robot', robot);
   renderRobotFields();
-  await applyPieces();
-}
-
-function renderPieces() {
-  const box = $('parts');
-  box.hidden = !pieces.length;
-  const head = document.createElement('div');
-  head.className = 'head';
-  head.innerHTML = `<strong>Pezzi da stampare</strong>`;
-  const add = Object.assign(document.createElement('button'), { className: 'ghost small', textContent: '+ Aggiungi file' });
-  add.onclick = () => addInput.click();
-  head.append(add);
-  const list = document.createElement('div');
-  list.className = 'list';
-  for (const p of pieces) {
-    const row = document.createElement('div');
-    row.className = 'part-row';
-    const s = meshStats(p.mesh).size;
-    const name = document.createElement('span');
-    name.className = 'name';
-    name.innerHTML = `${escapeHtml(p.label)}<span class="meta">${escapeHtml(p.format)} · ${s.map((v) => v.toFixed(0)).join('×')} mm</span>`;
-    const del = Object.assign(document.createElement('button'), { className: 'ghost solo', textContent: '✕', title: 'Rimuovi pezzo' });
-    del.onclick = () => {
-      pieces = pieces.filter((q) => q !== p);
-      if (pieces.length) applyPieces();
-      else location.reload();
-    };
-    row.append(document.createElement('span'), name, del);
-    list.append(row);
-  }
-  box.replaceChildren(head, list);
-}
-
-/** Pieces from different files are laid out side by side along X, 40 mm apart. */
-function layoutPieces(ps: Piece[]): MeshData {
-  if (ps.length === 1) return ps[0].mesh;
-  const gap = 40;
-  const widths = ps.map((p) => meshStats(p.mesh).size[0]);
-  let x = -(widths.reduce((a, b) => a + b, 0) + gap * (ps.length - 1)) / 2;
-  const placed = ps.map((p, i) => {
-    const m = dropToOrigin(p.mesh);
-    const moved = translate(m, x + widths[i] / 2, 0, 0);
-    x += widths[i] + gap;
-    return moved;
-  });
-  return orientOutward(weld(mergeMeshes(placed), 1e-3));
-}
-
-async function applyPieces() {
-  renderPieces();
+  mesh = piece;
+  $('pieceName').textContent = file.name;
+  $('pieceName').hidden = false;
   setNotes(pieceNotes);
-  mesh = layoutPieces(pieces);
   showModelInfo(mesh);
   $('empty').hidden = true;
   lastSrc = '';
@@ -240,7 +175,6 @@ async function applyPieces() {
   const off = placementOffset(mesh, robot);
   viewer.setModel(dropToOrigin(mesh), off, 1);
   viewer.setBed(robot.bedSizeX, robot.bedSizeY, [robot.bedCenterX, robot.bedCenterY, off[2]]);
-  viewer.setRobot(robotRootInBase(robot), robot.maxReach);
   viewer.fit();
   await analyze();
 }
@@ -248,7 +182,7 @@ async function applyPieces() {
 function showModelInfo(m: MeshData) {
   const s = meshStats(m);
   const rows: [string, string][] = [
-    ['Pezzi', pieces.map((p) => p.format).join(', ')],
+    ['Formato', pieceFormat],
     ['Triangoli', s.triangles.toLocaleString('it-IT')],
     ['Dimensioni', `${s.size.map((v) => v.toFixed(1)).join(' × ')} mm`],
     ['Chiusa', s.openEdges ? `no — ${s.openEdges} bordi aperti` : 'sì (watertight)'],
@@ -398,17 +332,6 @@ const ROBOT_FIELDS: Field[] = [
   { key: 'originY', label: 'Centro Y in BASE', kind: 'number', step: 1 },
   { key: 'originZ', label: 'Piano Z in BASE', kind: 'number', step: 0.5 },
   { key: 'rotationZ', label: 'Rotazione pezzo Z (°)', kind: 'number', step: 15 },
-  { key: 'worldBaseX', label: 'BASE in mondo X', kind: 'number', step: 1 },
-  { key: 'worldBaseY', label: 'BASE in mondo Y', kind: 'number', step: 1 },
-  { key: 'worldBaseZ', label: 'BASE in mondo Z', kind: 'number', step: 1 },
-  { key: 'bedSizeX', label: 'Piano X (mm)', kind: 'number', step: 10 },
-  { key: 'bedSizeY', label: 'Piano Y (mm)', kind: 'number', step: 10 },
-  { key: 'bedCenterX', label: 'Centro piano X', kind: 'number', step: 10 },
-  { key: 'bedCenterY', label: 'Centro piano Y', kind: 'number', step: 10 },
-  { group: 'Dati controller (per controllo sbraccio)' },
-  ...['X', 'Y', 'Z', 'A', 'B', 'C'].map((k, i): Field => ({ key: `baseData.${i}`, label: `BASE_DATA ${k}`, kind: 'number', step: 1 })),
-  ...['X', 'Y', 'Z', 'A', 'B', 'C'].map((k, i): Field => ({ key: `toolData.${i}`, label: `TOOL_DATA ${k}`, kind: 'number', step: 1 })),
-  { key: 'maxReach', label: 'Sbraccio max flangia (mm)', kind: 'number', step: 10, min: 0 },
   { group: 'Posizione sicura (assi)' },
   ...[1, 2, 3, 4, 5, 6].map((n): Field => ({ key: `safeAxes.${n - 1}`, label: `A${n} (°)`, kind: 'number', step: 1 })),
 ];
@@ -541,7 +464,7 @@ async function build(): Promise<BuildMsg | null> {
   viewer.setModel(r.mesh, r.offset, parseFloat($<HTMLInputElement>('opacity').value));
   viewer.setBed(robot.bedSizeX, robot.bedSizeY, [robot.bedCenterX, robot.bedCenterY, r.offset[2]]);
   viewer.setToolpath(r.xyz, r.ext, r.meta.layerStart, r.offset);
-  viewer.setRobot(robotRootInBase(robot), robot.maxReach);
+  if (r.reach.first) showRobot(r.reach.first);
   viewer.setStartMarker(r.xyz.length ? [r.xyz[0] + r.offset[0], r.xyz[1] + r.offset[1], r.xyz[2] + r.offset[2]] : null);
   const slider = $<HTMLInputElement>('layerSlider');
   slider.max = String(Math.max(0, r.meta.layerStart.length - 1));
@@ -562,11 +485,36 @@ function updateLayerLabel() {
   $('layerOut').textContent = `${i + 1} / ${currentMeta.layerStart.length} · Z ${((i + 1) * currentMeta.layerHeight).toFixed(1)}`;
 }
 $<HTMLInputElement>('layerSlider').addEventListener('input', (e) => {
-  viewer.showUpToLayer(+(e.target as HTMLInputElement).value);
+  const layer = +(e.target as HTMLInputElement).value;
+  viewer.showUpToLayer(layer);
   updateLayerLabel();
+  // Put the nozzle on the last point of the visible layers.
+  if (lastBuild && currentMeta) {
+    const n = lastBuild.xyz.length / 3;
+    const i = Math.max(0, (layer + 1 < currentMeta.layerStart.length ? currentMeta.layerStart[layer + 1] : n) - 1);
+    const o = lastBuild.offset;
+    const q = poseAt([lastBuild.xyz[i * 3] + o[0], lastBuild.xyz[i * 3 + 1] + o[1], lastBuild.xyz[i * 3 + 2] + o[2]], robot, robotPose);
+    if (q) showRobot(q);
+  }
 });
 $<HTMLInputElement>('opacity').addEventListener('input', (e) => viewer.setModelOpacity(+(e.target as HTMLInputElement).value));
 $('fitBtn').onclick = () => viewer.fit();
+
+// ---------- fixed robot cell ----------
+
+let robotPose: Joints = [...robot.safeAxes] as Joints;
+function showRobot(q: Joints) {
+  robotPose = q;
+  const f = robotRootFrame(robot);
+  viewer.setRobotPose(f.p, f.R, linkTransforms(q), KR16.flangeHome);
+}
+viewer
+  .loadCell('./cell')
+  .then(() => {
+    showRobot(robotPose);
+    if (!mesh) viewer.fit();
+  })
+  .catch(() => setNotes([], 'Impossibile caricare la cella del robot (cell.bin).'));
 
 // ---------- click-to-place / click-to-start ----------
 
@@ -623,8 +571,10 @@ function renderStats(r: BuildMsg) {
       true,
     ],
     [
-      'Robot (flangia)',
-      `distanza da A1 ${r.reach.minRadius.toFixed(0)} … ${r.reach.maxRadius.toFixed(0)} mm (limite ${robot.maxReach})\nquota ${r.reach.minZ.toFixed(0)} … ${r.reach.maxZ.toFixed(0)} mm`,
+      'Assi robot (min … max)',
+      r.reach.unreachable === r.xyz.length / 3
+        ? 'nessun punto raggiungibile'
+        : r.reach.jointMin.map((v, i) => `A${i + 1} ${v.toFixed(0)} … ${r.reach.jointMax[i].toFixed(0)}°`).join('\n'),
       true,
     ],
     ['File .src', kb > 1024 ? `${(kb / 1024).toFixed(1)} MB` : `${kb.toFixed(0)} KB`],
@@ -662,94 +612,3 @@ $('previewBtn').onclick = () => {
   pre.hidden = !pre.hidden;
   if (!pre.hidden) showPreview();
 };
-
-// ---------- chat with Claude ----------
-
-const ENUMS: Record<string, string[]> = {
-  mode: ['auto', 'spiral', 'planar'],
-  startMode: ['auto', 'point'],
-  placement: ['origin', 'file'],
-};
-
-/** Apply a partial settings object after checking every key and type against the defaults. */
-function applyPatch(target: Record<string, unknown>, defaults: Record<string, unknown>, patch: Record<string, unknown>, name: string): string[] {
-  const errors: string[] = [];
-  for (const [k, v] of Object.entries(patch)) {
-    const def = defaults[k];
-    if (def === undefined) errors.push(`${name}.${k}: chiave sconosciuta`);
-    else if (ENUMS[k] && !ENUMS[k].includes(v as string)) errors.push(`${name}.${k}: valori ammessi ${ENUMS[k].join(', ')}`);
-    else if (Array.isArray(def)) {
-      if (!Array.isArray(v) || v.length !== def.length || !v.every((x) => typeof x === 'number' && Number.isFinite(x)))
-        errors.push(`${name}.${k}: serve un array di ${def.length} numeri`);
-      else target[k] = [...v];
-    } else if (typeof def === 'number' && !(typeof v === 'number' && Number.isFinite(v))) errors.push(`${name}.${k}: serve un numero`);
-    else if (typeof def !== 'number' && typeof v !== typeof def) errors.push(`${name}.${k}: tipo ${typeof def} atteso`);
-    else target[k] = v;
-  }
-  return errors;
-}
-
-function resultSummary(r: BuildMsg | null) {
-  if (!r) return null;
-  const t = r.meta;
-  const round = (v: number[]) => v.map((x) => Math.round(x * 10) / 10);
-  return {
-    mode: t.mode,
-    layers: t.layerCount,
-    points: r.xyz.length / 3,
-    printLength_m: +(t.printLength / 1000).toFixed(2),
-    travels: t.travels,
-    firstPointBase: r.xyz.length ? round([r.xyz[0] + r.offset[0], r.xyz[1] + r.offset[1], r.xyz[2] + r.offset[2]]) : null,
-    partOriginBase: round(r.offset),
-    extentBase: { min: round(r.min), max: round(r.max) },
-    flangeReach_mm: { min: Math.round(r.reach.minRadius), max: Math.round(r.reach.maxRadius), outOfReach: r.reach.outOfReach },
-    warnings: t.warnings,
-  };
-}
-
-let needsAnalysis = false;
-mountChat({
-  state: () => ({
-    model: mesh
-      ? { files: pieces.map((p) => p.file), size_mm: meshStats(mesh).size.map((v) => Math.round(v)) }
-      : null,
-    orientations: orientations.map((o, i) => ({ index: i, label: o.label, height: Math.round(o.height), notes: o.notes })),
-    currentOrientation: orientIdx,
-    manualRotationApplied: manual.some((v, i) => v !== IDENTITY[i]),
-    print,
-    robot,
-    result: resultSummary(lastBuild),
-  }),
-  update: (target, patch) => {
-    const errs =
-      target === 'print'
-        ? applyPatch(print as unknown as Record<string, unknown>, DEFAULT_PRINT as unknown as Record<string, unknown>, patch, 'print')
-        : applyPatch(robot as unknown as Record<string, unknown>, DEFAULT_ROBOT as unknown as Record<string, unknown>, patch, 'robot');
-    if (target === 'print' && Object.keys(patch).some((k) => ANALYSIS_KEYS.includes(k))) needsAnalysis = true;
-    save('gb.print', print);
-    save('gb.robot', robot);
-    renderPrintFields();
-    renderRobotFields();
-    return errs;
-  },
-  chooseOrientation: (i) => {
-    if (!Number.isInteger(i) || i < 0 || i >= orientations.length) return `indice fuori intervallo (0–${orientations.length - 1})`;
-    orientIdx = i;
-    manual = [...IDENTITY] as Mat3;
-    fitNext = true;
-    renderOrientations();
-    return null;
-  },
-  rotate: (axis, deg) => {
-    if (!mesh) return 'nessun modello caricato';
-    manual = mulMat3({ x: rotX, y: rotY, z: rotZ }[axis](deg), manual);
-    fitNext = true;
-    return null;
-  },
-  rebuild: async () => {
-    if (!mesh) return { error: 'Nessun modello caricato: chiedi all’utente di caricarne uno.' };
-    const r = needsAnalysis ? await analyze() : await build();
-    needsAnalysis = false;
-    return resultSummary(r ?? lastBuild);
-  },
-});

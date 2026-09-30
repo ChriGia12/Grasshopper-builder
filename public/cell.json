@@ -1,0 +1,147 @@
+{
+ "source": "BASE ROBOT.3dm",
+ "worldBase": [
+  1448,
+  -1000,
+  5
+ ],
+ "parts": [
+  {
+   "name": "BASE",
+   "kind": "link",
+   "color": "#3a3f45",
+   "link": 0,
+   "positions": [
+    0,
+    9789
+   ],
+   "indices": [
+    39156,
+    20175
+   ]
+  },
+  {
+   "name": "A1",
+   "kind": "link",
+   "color": "#ff6a13",
+   "link": 1,
+   "positions": [
+    119856,
+    46620
+   ],
+   "indices": [
+    306336,
+    96540
+   ]
+  },
+  {
+   "name": "A2",
+   "kind": "link",
+   "color": "#ff6a13",
+   "link": 2,
+   "positions": [
+    692496,
+    21675
+   ],
+   "indices": [
+    779196,
+    44259
+   ]
+  },
+  {
+   "name": "A3",
+   "kind": "link",
+   "color": "#ff6a13",
+   "link": 3,
+   "positions": [
+    956232,
+    41664
+   ],
+   "indices": [
+    1122888,
+    85785
+   ]
+  },
+  {
+   "name": "A4",
+   "kind": "link",
+   "color": "#ff6a13",
+   "link": 4,
+   "positions": [
+    1466028,
+    14373
+   ],
+   "indices": [
+    1523520,
+    28842
+   ]
+  },
+  {
+   "name": "A5",
+   "kind": "link",
+   "color": "#ff6a13",
+   "link": 5,
+   "positions": [
+    1638888,
+    10701
+   ],
+   "indices": [
+    1681692,
+    22284
+   ]
+  },
+  {
+   "name": "A6",
+   "kind": "link",
+   "color": "#3a3f45",
+   "link": 6,
+   "positions": [
+    1770828,
+    954
+   ],
+   "indices": [
+    1774644,
+    2217
+   ]
+  },
+  {
+   "name": "mandrino",
+   "kind": "tool",
+   "color": "#c9ced6",
+   "positions": [
+    1783512,
+    14514
+   ],
+   "indices": [
+    1841568,
+    30198
+   ]
+  },
+  {
+   "name": "tavole",
+   "kind": "static",
+   "color": "#8b6b4a",
+   "positions": [
+    1962360,
+    17748
+   ],
+   "indices": [
+    2033352,
+    35748
+   ]
+  },
+  {
+   "name": "lastra",
+   "kind": "static",
+   "color": "#e8e4dc",
+   "positions": [
+    2176344,
+    24
+   ],
+   "indices": [
+    2176440,
+    36
+   ]
+  }
+ ]
+}

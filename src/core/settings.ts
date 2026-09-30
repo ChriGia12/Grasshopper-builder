@@ -4,6 +4,7 @@ export type PrintMode = 'auto' | 'spiral' | 'planar';
 
 export interface PrintSettings {
   layerHeight: number; // mm
+  firstLayerZ: number; // mm, nozzle height of the first layer above the table (Tavolino1: 0.5)
   walls: number; // number of concentric perimeters
   wallSpacing: number; // mm, bead width / distance between perimeters
   tolerance: number; // mm, max chord deviation from the exact contour
@@ -62,12 +63,11 @@ export interface RobotSettings {
   baseData: [number, number, number, number, number, number];
   /** Controller TOOL_DATA[toolNumber] {X,Y,Z,A,B,C}, relative to the flange. */
   toolData: [number, number, number, number, number, number];
-  /** mm, max horizontal distance of the flange from axis A1 (KR16 R2010 ≈ 2010). */
-  maxReach: number;
 }
 
 export const DEFAULT_PRINT: PrintSettings = {
   layerHeight: 1.5,
+  firstLayerZ: 0.5,
   walls: 1,
   wallSpacing: 6,
   tolerance: 0.2,
@@ -107,14 +107,13 @@ export const DEFAULT_ROBOT: RobotSettings = {
   worldBaseZ: 5,
   originX: 5,
   originY: 515,
-  originZ: 37,
+  originZ: 38, // top of the work plate (lastra) in BASE
   rotationZ: 0,
-  bedSizeX: 800,
-  bedSizeY: 800,
-  bedCenterX: 5,
-  bedCenterY: 515,
+  bedSizeX: 640,
+  bedSizeY: 1350,
+  bedCenterX: 0,
+  bedCenterY: 450,
   safeAxes: [0, -90, 90, 0, -1, 0],
   baseData: [0, 1000, 0, 0, 0, 0],
   toolData: [372.65, 0, 78.111, 0, 0, 0],
-  maxReach: 2010,
 };

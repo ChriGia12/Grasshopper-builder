@@ -253,6 +253,7 @@ export interface CellRegion {
 }
 
 type Box = ReturnType<typeof computeBounds>;
+const CELL_LAYER = /base di lavorazione|robot|kuka|mandrino|dima|cella/i;
 const volume = (b: Box) => (b.max[0] - b.min[0]) * (b.max[1] - b.min[1]) * (b.max[2] - b.min[2]);
 
 /** One object per group of objects occupying the same box (same piece saved as mesh, BREP, SubD…), preferring meshes. */
@@ -277,6 +278,7 @@ function dedupe(items: { p: ModelPart; b: Box }[]): { parts: ModelPart[]; b: Box
  * Files with a few objects (a piece or a set of pieces) are taken as they are.
  */
 export function pickPieces(model: LoadedModel, cell: CellRegion): { parts: ModelPart[]; note: string | null } {
+  // A file with a few objects is the piece itself (e.g. a BREP split in solids): merge them all.
   if (model.parts.length <= 5) {
     const g = dedupe(model.parts.map((p) => ({ p, b: computeBounds(p.mesh) })));
     return { parts: g.flatMap((x) => x.parts), note: null };
@@ -290,15 +292,17 @@ export function pickPieces(model: LoadedModel, cell: CellRegion): { parts: Model
   const onTable = model.parts
     .map((p) => ({ p, b: computeBounds(p.mesh) }))
     .filter(({ b }) => b.min[0] >= x0 && b.max[0] <= x1 && b.min[1] >= y0 && b.max[1] <= y1 && b.min[2] >= wz - 20 && b.min[2] <= wz + 150);
-  const groups = dedupe(onTable).sort((a, b) => volume(b.b) - volume(a.b));
+  let groups = dedupe(onTable.filter(({ p }) => !CELL_LAYER.test(p.layer)));
+  // A fixture or old table model has the piece standing inside its bounding box: drop it.
+  const inside = (i: Box, o: Box) => [0, 1, 2].every((k) => i.min[k] >= o.min[k] - 1 && i.max[k] <= o.max[k] + 1);
+  groups = groups.filter((g) => !groups.some((o) => o !== g && inside(o.b, g.b))).sort((a, b) => volume(b.b) - volume(a.b));
   if (!groups.length)
     return {
       parts: [],
       note: `Il file contiene ${model.parts.length} oggetti ma nessuno sul piano di lavoro: esporta da Rhino solo il pezzo (Esporta selezionati) e ricaricalo.`,
     };
-  // Main piece = biggest; other pieces on the table at least 30% of its volume are kept too.
-  const keep = groups.filter((g) => volume(g.b) >= 0.3 * volume(groups[0].b));
-  const parts = keep.flatMap((g) => g.parts);
+  // One piece only: the biggest object standing on the table.
+  const parts = groups[0].parts;
   const names = parts.map((p) => `${p.type}${p.name ? ' ' + p.name : ''} (layer "${p.layer}")`).join(', ');
   return { parts, note: `Scena Rhino con ${model.parts.length} oggetti: usato solo ciò che sta sul piano → ${names}.` };
 }

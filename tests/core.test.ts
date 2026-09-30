@@ -64,7 +64,7 @@ describe('polyline', () => {
 describe('toolpath', () => {
   it('uses spiral mode for a single-contour vase', () => {
     const m = weld(cylinder(60, 40, 30));
-    const tp = buildToolpath(m, { ...DEFAULT_PRINT, layerHeight: 1.5 });
+    const tp = buildToolpath(m, { ...DEFAULT_PRINT, layerHeight: 1.5, firstLayerZ: 1.5 });
     expect(tp.mode).toBe('spiral');
     expect(tp.layerCount).toBe(20);
     expect(tp.travels).toBe(0);

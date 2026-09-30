@@ -25,11 +25,10 @@
             <input type="file" id="file" hidden />
             <strong>Trascina qui il file</strong>
             <span>oppure clicca per sceglierlo</span>
-            <small>Solo il pezzo (anche più file insieme): il robot e il piano sono già nella cella.<br>STL · OBJ · PLY · 3DM · STEP · IGES · BREP</small>
+            <small>Solo il pezzo, una mesh o un BREP: robot, piano e mandrino sono già nella cella.<br>STL · OBJ · PLY · 3DM · STEP · IGES · BREP</small>
           </label>
           <div id="modelInfo" class="info" hidden></div>
-          <div id="parts" class="parts" hidden></div>
-          <input type="file" id="addFile" hidden />
+          <div id="pieceName" class="piece-name" hidden></div>
           <ul id="modelNotes" class="notes"></ul>
         </section>
 
@@ -74,31 +73,9 @@
       <section class="viewport-wrap">
         <div id="viewport" class="viewport"></div>
         <div id="empty" class="empty">
-          <p>Carica un modello per iniziare.</p>
+          <p>Carica il pezzo da stampare.</p>
           <p class="muted">Tutto il calcolo avviene nel browser: il file non viene inviato a nessun server.</p>
         </div>
-        <button id="chatToggle" class="chat-toggle">Chat con Claude</button>
-        <section id="chat" class="chat" hidden>
-          <header>
-            <strong>Claude</strong>
-            <span class="muted">modifica il progetto a parole</span>
-            <button id="chatKeyEdit" class="ghost small" title="Chiave API">Chiave</button>
-            <button id="chatClose" class="ghost small" aria-label="Chiudi">✕</button>
-          </header>
-          <div id="chatKeyBox" class="chat-key">
-            <label class="field">Chiave API Anthropic
-              <input id="chatKey" type="password" placeholder="sk-ant-…" autocomplete="off" />
-            </label>
-            <small class="muted">Resta solo in questo browser e viene inviata solo ad Anthropic. Ogni messaggio consuma crediti API del tuo account.</small>
-          </div>
-          <div id="chatLog" class="chat-log">
-            <div class="msg assistant">Ciao! Posso cambiare punto iniziale, posizione sul piano, orientamento, altezza strato, modo di stampa… Prova: «inizia la stampa dall'angolo più vicino al robot».</div>
-          </div>
-          <div class="chat-input">
-            <textarea id="chatInput" rows="2" placeholder="Scrivi una correzione…"></textarea>
-            <button id="chatSend" class="primary">Invia</button>
-          </div>
-        </section>
         <div class="vp-tools" id="vpTools" hidden>
           <label>Strato <output id="layerOut">–</output>
             <input type="range" id="layerSlider" min="0" max="0" value="0" />

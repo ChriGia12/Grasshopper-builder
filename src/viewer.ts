@@ -3,6 +3,15 @@ import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import type { MeshData } from './core/mesh';
 
+interface CellPart {
+  name: string;
+  kind: 'static' | 'link' | 'tool';
+  color: string;
+  link?: number;
+  positions: [number, number];
+  indices: [number, number];
+}
+
 export class Viewer {
   private renderer: THREE.WebGLRenderer;
   private scene = new THREE.Scene();
@@ -12,7 +21,9 @@ export class Viewer {
   private path: THREE.LineSegments | null = null;
   private nozzle: THREE.Mesh;
   private bed: THREE.Group | null = null;
-  private robot: THREE.Group | null = null;
+  private robotRoot = new THREE.Group();
+  private links: THREE.Mesh[] = [];
+  private tool: THREE.Mesh | null = null;
   private startMarker: THREE.Mesh;
   private pickMode: 'none' | 'place' | 'start' = 'none';
   private bedZ = 0;
@@ -130,41 +141,55 @@ export class Viewer {
   setBed(sizeX: number, sizeY: number, center: [number, number, number]) {
     if (this.bed) this.scene.remove(this.bed);
     const grp = new THREE.Group();
-    grp.add(
-      new THREE.Mesh(
-        new THREE.PlaneGeometry(sizeX, sizeY),
-        new THREE.MeshStandardMaterial({ color: 0x5a6878, transparent: true, opacity: 0.35, side: THREE.DoubleSide }),
-      ),
-    );
+    // The real plate comes from the cell; this is only a 50 mm reference grid on it.
     const size = Math.max(sizeX, sizeY);
-    const grid = new THREE.GridHelper(size, Math.max(1, Math.round(size / 50)), 0x7f8c99, 0x4a5561);
+    const grid = new THREE.GridHelper(size, Math.max(1, Math.round(size / 50)), 0x9aa4ae, 0xb9b3a8);
+    grid.scale.set(sizeX / size, 1, sizeY / size);
     grid.rotation.x = Math.PI / 2;
     grid.position.z = 0.2;
     grp.add(grid);
-    grp.position.set(center[0], center[1], center[2] - 0.5);
+    grp.position.set(center[0], center[1], center[2] + 0.3);
     this.bedZ = center[2];
     this.bed = grp;
     this.scene.add(grp);
   }
 
-  /** Robot root marker (A1 axis) and its reach circle, in the BASE frame. */
-  setRobot(root: [number, number, number], reach: number) {
-    if (this.robot) this.scene.remove(this.robot);
-    const grp = new THREE.Group();
-    const col = 0xff8a00;
-    const baseCyl = new THREE.Mesh(new THREE.CylinderGeometry(160, 180, 60, 40), new THREE.MeshStandardMaterial({ color: col }));
-    baseCyl.rotation.x = Math.PI / 2;
-    baseCyl.position.z = 30;
-    grp.add(baseCyl);
-    const pts: THREE.Vector3[] = [];
-    for (let i = 0; i <= 128; i++) {
-      const a = (i / 128) * Math.PI * 2;
-      pts.push(new THREE.Vector3(Math.cos(a) * reach, Math.sin(a) * reach, 1));
+  /**
+   * Fixed robot cell (public/cell.bin, extracted from BASE ROBOT.3dm): table and plate in the
+   * BASE frame, KR16 links in their home pose, mandrino in the flange frame. Always shown.
+   */
+  async loadCell(url: string) {
+    const [header, bin] = await Promise.all([
+      fetch(url + '.json').then((r) => r.json()),
+      fetch(url + '.bin').then((r) => r.arrayBuffer()),
+    ]);
+    for (const part of header.parts as CellPart[]) {
+      const g = new THREE.BufferGeometry();
+      g.setAttribute('position', new THREE.BufferAttribute(new Float32Array(bin, part.positions[0], part.positions[1]), 3));
+      g.setIndex(new THREE.BufferAttribute(new Uint32Array(bin, part.indices[0], part.indices[1]), 1));
+      g.computeVertexNormals();
+      const mesh = new THREE.Mesh(g, new THREE.MeshStandardMaterial({ color: part.color, roughness: 0.6, metalness: 0.1 }));
+      if (part.kind === 'static') this.scene.add(mesh);
+      else {
+        mesh.matrixAutoUpdate = false;
+        this.robotRoot.add(mesh);
+        if (part.kind === 'link') this.links[part.link!] = mesh;
+        else this.tool = mesh;
+      }
     }
-    grp.add(new THREE.Line(new THREE.BufferGeometry().setFromPoints(pts), new THREE.LineDashedMaterial({ color: col, dashSize: 40, gapSize: 25 })).computeLineDistances());
-    grp.position.set(...root);
-    this.robot = grp;
-    this.scene.add(grp);
+    this.scene.add(this.robotRoot);
+  }
+
+  /** Place the robot root (BASE frame) and pose the arm; `links` are row-major 4×4 from linkTransforms. */
+  setRobotPose(root: [number, number, number], rootRotation: number[], links: number[][], flange: [number, number, number]) {
+    const R = rootRotation;
+    this.robotRoot.matrixAutoUpdate = false;
+    this.robotRoot.matrix.set(R[0], R[1], R[2], root[0], R[3], R[4], R[5], root[1], R[6], R[7], R[8], root[2], 0, 0, 0, 1);
+    links.forEach((m, k) => this.links[k]?.matrix.set(...(m as Parameters<THREE.Matrix4['set']>)));
+    if (this.tool) {
+      const m = links[6];
+      this.tool.matrix.set(...(m as Parameters<THREE.Matrix4['set']>)).multiply(new THREE.Matrix4().makeTranslation(...flange));
+    }
   }
 
   setToolpath(xyz: Float32Array | null, ext: Uint8Array | null, layerStart: number[], offset: [number, number, number]) {
@@ -223,11 +248,13 @@ export class Viewer {
     const box = new THREE.Box3();
     if (this.model) box.expandByObject(this.model);
     if (this.path) box.expandByObject(this.path);
+    if (box.isEmpty()) box.setFromObject(this.robotRoot).expandByObject(this.bed ?? this.robotRoot);
     if (box.isEmpty()) return;
     const center = box.getCenter(new THREE.Vector3());
     const size = box.getSize(new THREE.Vector3()).length();
     this.controls.target.copy(center);
-    this.camera.position.copy(center).add(new THREE.Vector3(0.9, -1.1, 0.8).normalize().multiplyScalar(size * 1.3));
+    // View from the side opposite the robot (robot sits at −Y), a bit from above.
+    this.camera.position.copy(center).add(new THREE.Vector3(1.1, 1.3, 0.9).normalize().multiplyScalar(Math.max(size * 1.6, 1800)));
     this.camera.near = size / 200;
     this.camera.far = size * 50;
     this.camera.updateProjectionMatrix();

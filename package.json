@@ -10,7 +10,6 @@
   },
   "description": "Web app: mesh/BREP -> contour toolpath -> KUKA .src for robotic 3D printing",
   "dependencies": {
-    "@anthropic-ai/sdk": "^0.130.0",
     "clipper-lib": "^6.4.2",
     "three": "^0.186.1"
   },
