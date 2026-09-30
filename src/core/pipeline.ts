@@ -2,6 +2,7 @@
 import { writeKukaSrc } from './kuka';
 import { applyMatrix, computeBounds, dropToOrigin, type Mat3, type MeshData } from './mesh';
 import type { PrintSettings, RobotSettings } from './settings';
+import { reachReport, type ReachReport } from './robot';
 import { buildToolpath, type Toolpath } from './toolpath';
 
 export interface BuildResult {
@@ -14,6 +15,7 @@ export interface BuildResult {
   /** Toolpath extents in the BASE frame. */
   min: [number, number, number];
   max: [number, number, number];
+  reach: ReachReport;
 }
 
 /** Where the local part frame lands in BASE coordinates. */
@@ -56,5 +58,13 @@ export function runBuild(
   if (sx > robot.bedSizeX || sy > robot.bedSizeY)
     toolpath.warnings.push(`Il pezzo (${sx.toFixed(0)}×${sy.toFixed(0)} mm) è più grande del piano (${robot.bedSizeX}×${robot.bedSizeY} mm).`);
   if (min[2] < 0) toolpath.warnings.push('Alcuni punti hanno Z negativa nel sistema BASE: controlla la posizione.');
-  return { toolpath, src, offset, mesh, min, max };
+
+  const basePts = new Float64Array(toolpath.points.length * 3);
+  toolpath.points.forEach((p, i) => basePts.set([p.x + offset[0], p.y + offset[1], p.z + offset[2]], i * 3));
+  const reach = reachReport(basePts, robot);
+  if (reach.outOfReach)
+    toolpath.warnings.push(
+      `${reach.outOfReach} punti oltre lo sbraccio (flangia a ${reach.maxRadius.toFixed(0)} mm dall'asse A1, limite ${robot.maxReach} mm): avvicina il pezzo al robot.`,
+    );
+  return { toolpath, src, offset, mesh, min, max, reach };
 }

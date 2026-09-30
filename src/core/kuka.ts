@@ -31,6 +31,9 @@ function frame(p: PathPoint, r: RobotSettings): string {
   );
 }
 
+const frame6 = (f: number[]) =>
+  `{X ${f3(f[0])}, Y ${f3(f[1])}, Z ${f3(f[2])}, A ${f3(f[3])}, B ${f3(f[4])}, C ${f3(f[5])}}`;
+
 function axes(a: number[], withExternal: boolean): string {
   const v = a.map((x) => f3(x));
   const ext = withExternal ? ', E1 0, E2 0, E3 0, E4 0, E5 0, E6 0' : '';
@@ -66,6 +69,8 @@ GLOBAL INTERRUPT DECL 3 WHEN $STOPMESS==TRUE DO IR_STOPM ( )
 ; MODELLO: ${info.sourceName.replace(/[\r\n;]/g, ' ')}
 ; MODO: ${tp.mode === 'spiral' ? 'SPIRALE CONTINUA' : 'STRATI PLANARI'} | STRATI: ${tp.layerCount} | H STRATO: ${info.layerHeight} mm
 ; PUNTI: ${pts.length} | STAMPA: ${(tp.printLength / 1000).toFixed(2)} m | SPOSTAMENTI: ${tp.travels}
+; BASE_DATA[${r.baseNumber}] ATTESO: ${frame6(r.baseData)}
+; TOOL_DATA[${r.toolNumber}] ATTESO: ${frame6(r.toolData)}
 ; =========================
 
 ;FOLD INI

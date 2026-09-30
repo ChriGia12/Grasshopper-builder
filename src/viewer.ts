@@ -12,6 +12,7 @@ export class Viewer {
   private path: THREE.LineSegments | null = null;
   private nozzle: THREE.Mesh;
   private bed: THREE.Group | null = null;
+  private robot: THREE.Group | null = null;
   private layerStart: number[] = [];
   private xyz: Float32Array | null = null;
   private offset: [number, number, number] = [0, 0, 0];
@@ -109,6 +110,26 @@ export class Viewer {
     grp.add(grid);
     grp.position.set(center[0], center[1], center[2] - 0.5);
     this.bed = grp;
+    this.scene.add(grp);
+  }
+
+  /** Robot root marker (A1 axis) and its reach circle, in the BASE frame. */
+  setRobot(root: [number, number, number], reach: number) {
+    if (this.robot) this.scene.remove(this.robot);
+    const grp = new THREE.Group();
+    const col = 0xff8a00;
+    const baseCyl = new THREE.Mesh(new THREE.CylinderGeometry(160, 180, 60, 40), new THREE.MeshStandardMaterial({ color: col }));
+    baseCyl.rotation.x = Math.PI / 2;
+    baseCyl.position.z = 30;
+    grp.add(baseCyl);
+    const pts: THREE.Vector3[] = [];
+    for (let i = 0; i <= 128; i++) {
+      const a = (i / 128) * Math.PI * 2;
+      pts.push(new THREE.Vector3(Math.cos(a) * reach, Math.sin(a) * reach, 1));
+    }
+    grp.add(new THREE.Line(new THREE.BufferGeometry().setFromPoints(pts), new THREE.LineDashedMaterial({ color: col, dashSize: 40, gapSize: 25 })).computeLineDistances());
+    grp.position.set(...root);
+    this.robot = grp;
     this.scene.add(grp);
   }
 

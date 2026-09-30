@@ -36,7 +36,10 @@ Due modalità (sezione *Robot KUKA e piano*):
 - **Centra sul punto indicato**: il centro del pezzo va in `X/Y` e il piano a `Z` nel sistema BASE (default 5 / 515 / 37 → prima Z 38,5 come Tavolino1).
 - **Mantieni posizione del file**: usa la posizione del pezzo nel file Rhino e sottrae l'origine della BASE in coordinate mondo (default 1448 / −1000 / 5, dal post-processore Python).
 
-Le posizioni definitive di robot e piano di lavoro vanno inserite lì quando disponibili; tutti i parametri restano salvati nel browser.
+**Dati del controller** (default della cella attuale): `BASE_DATA[1] = {X 0, Y 1000, Z 0, A 0, B 0, C 0}`, `TOOL_DATA[11] = {X 372.65, Y 0, Z 78.111, A 0, B 0, C 0}`, E1–E4 = 0.
+Servono per calcolare la posizione della flangia per ogni punto (offset estrusore compreso) e segnalare i punti oltre lo sbraccio del KR16 R2010 (limite impostabile, default 2010 mm dall'asse A1). Il robot e il cerchio di sbraccio sono mostrati nell'anteprima. I valori vengono scritti come commento nell'intestazione del `.src` per confronto con il controller; il programma usa comunque `BASE_DATA[n]`/`TOOL_DATA[n]` del controller.
+
+Tutti i parametri restano salvati nel browser.
 
 ## Sviluppo
 

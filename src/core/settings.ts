@@ -49,6 +49,12 @@ export interface RobotSettings {
   bedSizeX: number;
   bedSizeY: number;
   safeAxes: [number, number, number, number, number, number];
+  /** Controller BASE_DATA[baseNumber] {X,Y,Z,A,B,C}, relative to the robot root. */
+  baseData: [number, number, number, number, number, number];
+  /** Controller TOOL_DATA[toolNumber] {X,Y,Z,A,B,C}, relative to the flange. */
+  toolData: [number, number, number, number, number, number];
+  /** mm, max horizontal distance of the flange from axis A1 (KR16 R2010 ≈ 2010). */
+  maxReach: number;
 }
 
 export const DEFAULT_PRINT: PrintSettings = {
@@ -93,4 +99,7 @@ export const DEFAULT_ROBOT: RobotSettings = {
   bedSizeX: 800,
   bedSizeY: 800,
   safeAxes: [0, -90, 90, 0, -1, 0],
+  baseData: [0, 1000, 0, 0, 0, 0],
+  toolData: [372.65, 0, 78.111, 0, 0, 0],
+  maxReach: 2010,
 };

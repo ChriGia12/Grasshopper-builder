@@ -4,6 +4,7 @@ import { sanitizeProgramName } from './core/kuka';
 import { IDENTITY, computeBounds, dropToOrigin, meshStats, mulMat3, rotX, rotY, rotZ, type Mat3, type MeshData } from './core/mesh';
 import type { OrientationCandidate } from './core/orientation';
 import { placementOffset } from './core/pipeline';
+import { robotRootInBase, type ReachReport } from './core/robot';
 import { DEFAULT_PRINT, DEFAULT_ROBOT, type PrintSettings, type RobotSettings } from './core/settings';
 import type { Toolpath } from './core/toolpath';
 import { Viewer } from './viewer';
@@ -401,6 +402,10 @@ const ROBOT_FIELDS: Field[] = [
   { key: 'worldBaseZ', label: 'BASE in mondo Z', kind: 'number', step: 1 },
   { key: 'bedSizeX', label: 'Piano X (mm)', kind: 'number', step: 10 },
   { key: 'bedSizeY', label: 'Piano Y (mm)', kind: 'number', step: 10 },
+  { group: 'Dati controller (per controllo sbraccio)' },
+  ...['X', 'Y', 'Z', 'A', 'B', 'C'].map((k, i): Field => ({ key: `baseData.${i}`, label: `BASE_DATA ${k}`, kind: 'number', step: 1 })),
+  ...['X', 'Y', 'Z', 'A', 'B', 'C'].map((k, i): Field => ({ key: `toolData.${i}`, label: `TOOL_DATA ${k}`, kind: 'number', step: 1 })),
+  { key: 'maxReach', label: 'Sbraccio max flangia (mm)', kind: 'number', step: 10, min: 0 },
   { group: 'Posizione sicura (assi)' },
   ...[1, 2, 3, 4, 5, 6].map((n): Field => ({ key: `safeAxes.${n - 1}`, label: `A${n} (°)`, kind: 'number', step: 1 })),
 ];
@@ -502,6 +507,7 @@ interface BuildMsg {
   mesh: MeshData;
   min: [number, number, number];
   max: [number, number, number];
+  reach: ReachReport;
 }
 
 let currentMeta: Toolpath | null = null;
@@ -525,6 +531,7 @@ async function build() {
   viewer.setModel(r.mesh, r.offset, parseFloat($<HTMLInputElement>('opacity').value));
   viewer.setBed(robot.bedSizeX, robot.bedSizeY, r.offset);
   viewer.setToolpath(r.xyz, r.ext, r.meta.layerStart, r.offset);
+  viewer.setRobot(robotRootInBase(robot), robot.maxReach);
   const slider = $<HTMLInputElement>('layerSlider');
   slider.max = String(Math.max(0, r.meta.layerStart.length - 1));
   slider.value = slider.max;
@@ -572,6 +579,11 @@ function renderStats(r: BuildMsg) {
     [
       'Estensione in BASE (mm)',
       `X ${r.min[0].toFixed(1)} … ${r.max[0].toFixed(1)}\nY ${r.min[1].toFixed(1)} … ${r.max[1].toFixed(1)}\nZ ${r.min[2].toFixed(1)} … ${r.max[2].toFixed(1)}`,
+      true,
+    ],
+    [
+      'Robot (flangia)',
+      `distanza da A1 ${r.reach.minRadius.toFixed(0)} … ${r.reach.maxRadius.toFixed(0)} mm (limite ${robot.maxReach})\nquota ${r.reach.minZ.toFixed(0)} … ${r.reach.maxZ.toFixed(0)} mm`,
       true,
     ],
     ['File .src', kb > 1024 ? `${(kb / 1024).toFixed(1)} MB` : `${kb.toFixed(0)} KB`],

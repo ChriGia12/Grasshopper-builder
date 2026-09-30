@@ -25,7 +25,7 @@ describe.skipIf(!file || !existsSync(file))('real .3dm file', () => {
     for (const c of cands.slice(0, 4)) console.log(c.label, c.score.toFixed(3), c.notes.join('; '));
     for (const placement of ['file', 'origin'] as const) {
       const r = runBuild(mesh, cands[0].matrix, DEFAULT_PRINT, { ...DEFAULT_ROBOT, placement }, file);
-      console.log(placement, r.toolpath.mode, r.toolpath.layerCount, r.toolpath.points.length, r.min.map(Math.round), r.max.map(Math.round), r.toolpath.warnings);
+      console.log(placement, r.toolpath.mode, r.toolpath.layerCount, r.toolpath.points.length, r.min.map(Math.round), r.max.map(Math.round), r.toolpath.warnings, r.reach);
       expect(r.src.startsWith('DEF ')).toBe(true);
       if (process.env.GB_OUT) writeFileSync(`${process.env.GB_OUT}/${placement}.src`, r.src);
     }
