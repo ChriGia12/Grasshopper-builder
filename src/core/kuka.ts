@@ -31,9 +31,6 @@ function frame(p: PathPoint, r: RobotSettings): string {
   );
 }
 
-const frame6 = (f: number[]) =>
-  `{X ${f3(f[0])}, Y ${f3(f[1])}, Z ${f3(f[2])}, A ${f3(f[3])}, B ${f3(f[4])}, C ${f3(f[5])}}`;
-
 function axes(a: number[], withExternal: boolean): string {
   const v = a.map((x) => f3(x));
   const ext = withExternal ? ', E1 0, E2 0, E3 0, E4 0, E5 0, E6 0' : '';
@@ -53,7 +50,7 @@ function extruderOn(r: RobotSettings, title: string): string[] {
   ];
 }
 
-export function writeKukaSrc(tp: Toolpath, r: RobotSettings, info: SrcInfo): string {
+export function writeKukaSrc(tp: Toolpath, r: RobotSettings, _info?: SrcInfo): string {
   if (!tp.points.length) throw new Error('Percorso vuoto: niente da esportare.');
   const name = sanitizeProgramName(r.programName);
   const pts = tp.points;
@@ -63,15 +60,6 @@ export function writeKukaSrc(tp: Toolpath, r: RobotSettings, info: SrcInfo): str
 
   h(`DEF ${name} ( )
 GLOBAL INTERRUPT DECL 3 WHEN $STOPMESS==TRUE DO IR_STOPM ( )
-
-; =========================
-; GENERATO DA GRASSHOPPER BUILDER
-; MODELLO: ${info.sourceName.replace(/[\r\n;]/g, ' ')}
-; MODO: ${tp.mode === 'spiral' ? 'SPIRALE CONTINUA' : 'STRATI PLANARI'} | STRATI: ${tp.layerCount} | H STRATO: ${info.layerHeight} mm
-; PUNTI: ${pts.length} | STAMPA: ${(tp.printLength / 1000).toFixed(2)} m | SPOSTAMENTI: ${tp.travels}
-; BASE_DATA[${r.baseNumber}] ATTESO: ${frame6(r.baseData)}
-; TOOL_DATA[${r.toolNumber}] ATTESO: ${frame6(r.toolData)}
-; =========================
 
 ;FOLD INI
 BAS (#INITMOV,0)
@@ -152,13 +140,9 @@ LIN ${frame(pts[0], r)} C_DIS
 
   L.push(...extruderOn(r, 'ACCENSIONE ESTRUSORE'), '', '; =========================', '; INIZIO STAMPA', '; =========================');
 
+  // Only LIN moves between start and end, exactly like Tavolino1.src (no extra comments).
   let extruding = true;
-  let layer = 0;
   for (let i = 1; i < pts.length; i++) {
-    while (layer + 1 < tp.layerStart.length && tp.layerStart[layer + 1] <= i) {
-      layer++;
-      if (tp.mode === 'planar') L.push(`; STRATO ${layer + 1}`);
-    }
     const p = pts[i];
     if (!p.e && extruding) {
       L.push('; ESTRUSORE OFF - SPOSTAMENTO', '$OUT[16]=FALSE', `$ANOUT[${r.extruderAnout}]=0`);
