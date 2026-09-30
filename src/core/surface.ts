@@ -85,6 +85,14 @@ export class HeightField {
   }
 }
 
+/** A pass on the surface, with its scan line and span for serpentine ordering. */
+export interface SurfaceRun {
+  pts: SurfacePoint[];
+  line: number;
+  lo: number;
+  hi: number;
+}
+
 export interface SurfaceOptions {
   spacing: number; // mm between passes (bead width)
   angle: number; // deg, direction of the passes in plan
@@ -94,9 +102,8 @@ export interface SurfaceOptions {
   inset: number; // mm kept from the surface border
 }
 
-/** Serpentine passes over the top surface, each as a list of surface points (unordered). */
-export function topSurfacePasses(mesh: MeshData, o: SurfaceOptions): SurfacePoint[][] {
-  const hf = new HeightField(mesh);
+/** Passes over the top surface, each as a list of surface points (unordered). */
+export function topSurfacePasses(mesh: MeshData, o: SurfaceOptions, hf = new HeightField(mesh)): SurfaceRun[] {
   const b = computeBounds(mesh);
   const a = (o.angle * Math.PI) / 180;
   const dir: Vec2 = [Math.cos(a), Math.sin(a)];
@@ -113,13 +120,18 @@ export function topSurfacePasses(mesh: MeshData, o: SurfaceOptions): SurfacePoin
   const [s0, s1] = [Math.min(...across), Math.max(...across)];
   const step = Math.max(0.5, Math.min(2, o.spacing / 4));
   const minNz = Math.cos((o.maxSlope * Math.PI) / 180);
-  const passes: SurfacePoint[][] = [];
+  const passes: SurfaceRun[] = [];
+  let line = 0;
 
-  for (let s = s0 + o.spacing / 2; s < s1; s += o.spacing) {
+  for (let s = s0 + o.spacing / 2; s < s1; s += o.spacing, line++) {
     let run: SurfacePoint[] = [];
     const flush = () => {
       const trimmed = trim(run, o.inset);
-      if (trimmed.length >= 2 && runLength(trimmed) >= o.minLength) passes.push(simplifyRun(trimmed, o.tolerance));
+      if (trimmed.length >= 2 && runLength(trimmed) >= o.minLength) {
+        const pts = simplifyRun(trimmed, o.tolerance);
+        const t = (q: SurfacePoint) => q.x * dir[0] + q.y * dir[1];
+        passes.push({ pts, line, lo: t(pts[0]), hi: t(pts[pts.length - 1]) });
+      }
       run = [];
     };
     for (let t = t0; t <= t1 + 1e-9; t += step) {

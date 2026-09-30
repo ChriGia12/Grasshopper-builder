@@ -38,6 +38,30 @@ describe('pieno a serpentina', () => {
   });
 });
 
+describe('pieno a serpentina con finitura superiore', () => {
+  const s = { ...DEFAULT_PRINT, mode: 'zigzag' as const, layerHeight: 1.5, firstLayerZ: 0.5, wallSpacing: 6, fillPerimeter: false, fillTopSurface: true, surfacePasses: 1 };
+  const tp = buildToolpath(wedge(), s);
+  const last = tp.layerStart[tp.layerStart.length - 1];
+
+  it('stops the planar body below the top surface', () => {
+    for (const p of tp.points.slice(0, last).filter((q) => q.e)) {
+      const beadTop = p.z + (1.5 - 0.5);
+      expect(beadTop).toBeLessThanOrEqual(20 + 0.5 * p.y - 1.5 + 1e-3 + 0.5 * 2); // within one sample step
+    }
+  });
+
+  it('closes with one layer following the surface (bead top on the real top)', () => {
+    const top = tp.points.slice(last).filter((q) => q.e);
+    expect(top.length).toBeGreaterThan(10);
+    for (const p of top) expect(p.z + 1).toBeCloseTo(20 + 0.5 * p.y, 3);
+  });
+
+  it('orders passes as a clean serpentine (no travels on a simple block)', () => {
+    const flat = buildToolpath(weld(box(100, 60, 9)), { ...s, fillTopSurface: false });
+    expect(flat.travels).toBe(0);
+  });
+});
+
 describe('superficie superiore a serpentina', () => {
   const s = { ...DEFAULT_PRINT, mode: 'surface' as const, firstLayerZ: 0.5, wallSpacing: 6, tolerance: 0.05 };
 

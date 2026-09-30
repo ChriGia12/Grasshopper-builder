@@ -3,10 +3,10 @@
 import { computeBounds, type MeshData } from './mesh';
 import { densify, polylineLength, rotateToNearest, signedArea, simplifyClosed, simplifyOpen, type Vec2 } from './polyline';
 import type { PrintMode, PrintSettings } from './settings';
-import { cFromNormal, topSurfacePasses } from './surface';
+import { cFromNormal, HeightField, topSurfacePasses, type SurfaceOptions, type SurfacePoint, type SurfaceRun } from './surface';
 import { sliceAt, type Contour, type Layer } from './slicer';
 import { buildWalls, collapseThinWalls, offsetContours } from './walls';
-import { scanFill, serpentine } from './zigzag';
+import { scanFill, serpentine, type Pass } from './zigzag';
 
 export interface PathPoint {
   x: number;
@@ -155,7 +155,7 @@ export function buildToolpath(
     buildPlanar(tp, summary.layers.slice(b + 1), s, cur);
     if (a > 0 || b < summary.layers.length - 1)
       warnings.push(`Spirale sugli strati ${a + 1}–${b + 1}; ${summary.layers.length - (b - a + 1)} strati di bordo stampati planari.`);
-  } else if (mode === 'zigzag') buildZigzag(tp, summary.layers, s, start);
+  } else if (mode === 'zigzag') buildZigzag(tp, mesh, summary.layers, s, start);
   else buildPlanar(tp, summary.layers, s, start);
   return tp;
 }
@@ -271,46 +271,141 @@ function buildSpiral(tp: Toolpath, layers: Layer[], s: PrintSettings, start: Vec
 /** Pass direction of layer i: the chosen angle, turned 90° on every other layer if alternating. */
 const passAngle = (s: PrintSettings, i: number) => s.fillAngle + (s.fillAlternate && i % 2 ? 90 : 0);
 
+type Keep = (x: number, y: number) => boolean;
+
+/** Split a polyline where `keep` fails, sampling every `step` mm. */
+function clipPolyline(pts: Vec2[], keep: Keep, step: number): Vec2[][] {
+  const out: Vec2[][] = [];
+  let run: Vec2[] = [];
+  const flush = () => {
+    if (run.length >= 2) out.push(run);
+    run = [];
+  };
+  for (let i = 0; i < pts.length; i++) {
+    const a = pts[i];
+    if (i === 0) {
+      if (keep(a[0], a[1])) run.push(a);
+      continue;
+    }
+    const b = pts[i - 1];
+    const n = Math.max(1, Math.ceil(Math.hypot(a[0] - b[0], a[1] - b[1]) / step));
+    for (let k = 1; k <= n; k++) {
+      const q: Vec2 = [b[0] + ((a[0] - b[0]) * k) / n, b[1] + ((a[1] - b[1]) * k) / n];
+      if (keep(q[0], q[1])) {
+        if (k === n || !run.length) run.push(q);
+      } else flush();
+    }
+  }
+  flush();
+  return out;
+}
+
+/** Print one layer's serpentine of straight passes at height z. */
+function printPasses(tp: Toolpath, passes: Pass[], z: number, s: PrintSettings, cur: Vec2): Vec2 {
+  for (const [p, flip] of serpentine(passes, cur, (q, end) => q[end])) {
+    const [a, b] = flip ? [p.b, p.a] : [p.a, p.b];
+    moveTo(tp, a, z, s);
+    for (const q of densify([a, b], s.maxSegment, false).slice(1)) push(tp, { x: q[0], y: q[1], z, e: true });
+    cur = b;
+  }
+  return cur;
+}
+
+/** Print surface runs (non-planar) raised by dz, with optional C from the normal. */
+function printSurfaceRuns(tp: Toolpath, runs: SurfaceRun[], dz: number, s: PrintSettings, cur: Vec2): Vec2 {
+  const end = (r: SurfaceRun, e: 'a' | 'b'): Vec2 => {
+    const q = e === 'a' ? r.pts[0] : r.pts[r.pts.length - 1];
+    return [q.x, q.y];
+  };
+  for (const [run, flip] of serpentine(runs, cur, end)) {
+    const pts = flip ? [...run.pts].reverse() : run.pts;
+    const cOf = (q: SurfacePoint) => (s.surfaceTilt ? cFromNormal(q.n) : undefined);
+    moveTo(tp, [pts[0].x, pts[0].y], pts[0].z + dz, s, cOf(pts[0]));
+    for (const q of pts.slice(1)) push(tp, { x: q.x, y: q.y, z: q.z + dz, e: true, c: cOf(q) });
+    cur = [pts[pts.length - 1].x, pts[pts.length - 1].y];
+  }
+  return cur;
+}
+
+const surfaceOptions = (s: PrintSettings, k: number): SurfaceOptions => ({
+  spacing: s.wallSpacing,
+  angle: passAngle(s, k),
+  maxSlope: s.surfaceMaxSlope,
+  tolerance: s.tolerance,
+  minLength: s.minContourLength,
+  inset: s.wallSpacing / 2,
+});
+
 /**
- * Solid layers: optional perimeter(s) on the outline, then the inside filled with parallel
- * passes one bead apart, joined in a serpentine so the extruder never stops inside a region.
+ * Solid part in serpentine. The body is printed in planar layers, each filled with parallel
+ * passes one bead apart (optionally after the outline). With the top finish on, the body stops
+ * below the top surface, leaving room for `surfacePasses` layers that follow the surface
+ * (the same serpentine as the surface mode), the last one on the real top of the part.
  */
-function buildZigzag(tp: Toolpath, layers: Layer[], s: PrintSettings, start: Vec2) {
+function buildZigzag(tp: Toolpath, mesh: MeshData, layers: Layer[], s: PrintSettings, start: Vec2) {
+  const h = s.layerHeight;
+  const w = s.wallSpacing;
+  const hf = s.fillTopSurface ? new HeightField(mesh) : null;
+  const shell = s.surfacePasses * h; // thickness left for the non-planar top layers
+  const step = Math.max(0.5, Math.min(2, w / 4));
   let cur: Vec2 = start;
+
   layers.forEach((layer, li) => {
     tp.layerStart.push(tp.points.length);
     const closed = layer.contours.filter((c) => c.closed);
     if (!closed.length) return;
+    const beadTop = layer.z + (h - s.firstLayerZ); // top of this layer's bead above the table
+    const keep: Keep = hf
+      ? (x, y) => {
+          const t = hf.top(x, y);
+          return !!t && t.z - beadTop >= shell - 1e-6;
+        }
+      : () => true;
+
     if (s.fillPerimeter) {
-      for (const wall of buildWalls(closed, s.walls, s.wallSpacing)) {
+      for (const wall of buildWalls(closed, s.walls, w)) {
         const pending = [...wall];
         while (pending.length) {
           const loop = prepareLoop(pending.splice(nearestIndex(pending, cur), 1)[0], s, cur);
-          moveTo(tp, loop[0], layer.z, s);
-          for (let i = 1; i < loop.length; i++) push(tp, { x: loop[i][0], y: loop[i][1], z: layer.z, e: true });
-          push(tp, { x: loop[0][0], y: loop[0][1], z: layer.z, e: true });
-          cur = loop[0];
+          const pieces = hf ? clipPolyline([...loop, loop[0]], keep, step) : [[...loop, loop[0]]];
+          for (const piece of pieces) {
+            const pts = hf ? simplifyOpen(piece, s.tolerance) : piece;
+            moveTo(tp, pts[0], layer.z, s);
+            for (const q of pts.slice(1)) push(tp, { x: q[0], y: q[1], z: layer.z, e: true });
+            cur = pts[pts.length - 1];
+          }
         }
       }
     }
-    // Region edge = where the material must end: the outline itself, or the inner edge of the
-    // innermost perimeter bead. Passes keep half a bead from it; with perimeters their ends
-    // overlap the perimeter bead by a quarter bead so the two fuse.
-    const w = s.wallSpacing;
+    // Region edge = where material must end: the outline, or the inner edge of the innermost
+    // perimeter bead. Passes keep half a bead from it; with perimeters their ends overlap the
+    // perimeter bead by a quarter bead so the two fuse.
     const region = s.fillPerimeter ? offsetContours(closed, -(s.walls - 0.5) * w) : closed;
-    const passes = scanFill(region, w, passAngle(s, li), s.fillPerimeter ? w / 4 : w / 2);
-    for (const [p, flip] of serpentine(passes, cur, (q, end) => q[end])) {
-      const [a, b] = flip ? [p.b, p.a] : [p.a, p.b];
-      moveTo(tp, a, layer.z, s);
-      for (const q of densify([a, b], s.maxSegment, false).slice(1)) push(tp, { x: q[0], y: q[1], z: layer.z, e: true });
-      cur = b;
-    }
+    let passes = scanFill(region, w, passAngle(s, li), s.fillPerimeter ? w / 4 : w / 2);
+    if (hf)
+      passes = passes.flatMap((p) =>
+        clipPolyline([p.a, p.b], keep, step).map((q) => {
+          const len = Math.hypot(p.b[0] - p.a[0], p.b[1] - p.a[1]) || 1;
+          const t = (v: Vec2) => p.lo + ((v[0] - p.a[0]) * (p.b[0] - p.a[0]) + (v[1] - p.a[1]) * (p.b[1] - p.a[1])) / len;
+          return { a: q[0], b: q[q.length - 1], line: p.line, lo: t(q[0]), hi: t(q[q.length - 1]) };
+        }),
+      );
+    cur = printPasses(tp, passes, layer.z, s, cur);
   });
+
+  if (!hf) return;
+  // Top finish: surfacePasses layers following the top surface; the last one is the real top.
+  for (let k = 0; k < s.surfacePasses; k++) {
+    tp.layerStart.push(tp.points.length);
+    const dz = -(s.surfacePasses - 1 - k) * h - (h - s.firstLayerZ);
+    cur = printSurfaceRuns(tp, topSurfacePasses(mesh, surfaceOptions(s, layers.length + k), hf), dz, s, cur);
+  }
+  tp.layerCount = layers.length + s.surfacePasses;
 }
 
 /**
- * Non-planar: serpentine over the top surface only. Every point takes the surface height
- * (+ first-layer offset, + one layer height per extra pass); with tilt on, C follows the normal.
+ * Non-planar: serpentine over the top surface only, printed on top of an existing part. Every
+ * point takes the surface height (+ first-layer offset, + one layer height per extra pass).
  */
 function buildSurface(mesh: MeshData, s: PrintSettings, start: Vec2): Toolpath {
   const tp: Toolpath = {
@@ -324,33 +419,16 @@ function buildSurface(mesh: MeshData, s: PrintSettings, start: Vec2): Toolpath {
     travels: 0,
     warnings: [],
   };
+  const hf = new HeightField(mesh);
   let cur: Vec2 = start;
   for (let k = 0; k < s.surfacePasses; k++) {
     tp.layerStart.push(tp.points.length);
-    const dz = s.firstLayerZ + k * s.layerHeight;
-    const passes = topSurfacePasses(mesh, {
-      spacing: s.wallSpacing,
-      angle: passAngle(s, k),
-      maxSlope: s.surfaceMaxSlope,
-      tolerance: s.tolerance,
-      minLength: s.minContourLength,
-      inset: s.wallSpacing / 2,
-    });
-    if (!passes.length) {
-      tp.warnings.push('Nessuna superficie superiore trovata: controlla l\'orientamento del pezzo.');
+    const runs = topSurfacePasses(mesh, surfaceOptions(s, k), hf);
+    if (!runs.length) {
+      tp.warnings.push("Nessuna superficie superiore trovata: controlla l'orientamento del pezzo.");
       break;
     }
-    const end = (p: (typeof passes)[number], e: 'a' | 'b'): Vec2 => {
-      const q = e === 'a' ? p[0] : p[p.length - 1];
-      return [q.x, q.y];
-    };
-    for (const [pass, flip] of serpentine(passes, cur, end)) {
-      const pts = flip ? [...pass].reverse() : pass;
-      const cOf = (q: (typeof pts)[number]) => (s.surfaceTilt ? cFromNormal(q.n) : undefined);
-      moveTo(tp, [pts[0].x, pts[0].y], pts[0].z + dz, s, cOf(pts[0]));
-      for (const q of pts.slice(1)) push(tp, { x: q.x, y: q.y, z: q.z + dz, e: true, c: cOf(q) });
-      cur = [pts[pts.length - 1].x, pts[pts.length - 1].y];
-    }
+    cur = printSurfaceRuns(tp, runs, s.firstLayerZ + k * s.layerHeight, s, cur);
   }
   return tp;
 }

@@ -24,6 +24,7 @@ export interface PrintSettings {
   fillAngle: number; // deg, direction of serpentine passes in plan
   fillAlternate: boolean; // turn passes 90° on every other layer / pass
   fillPerimeter: boolean; // zigzag: print the outline (walls) before filling
+  fillTopSurface: boolean; // zigzag: finish with layers that follow the top surface (non-planar)
   surfacePasses: number; // surface: how many layers stacked on the top surface
   surfaceMaxSlope: number; // surface: faces steeper than this (deg) are walls, not top
   surfaceTilt: boolean; // surface: tilt the tool with C following the surface normal
@@ -92,6 +93,7 @@ export const DEFAULT_PRINT: PrintSettings = {
   fillAngle: 0,
   fillAlternate: true,
   fillPerimeter: true,
+  fillTopSurface: true,
   surfacePasses: 1,
   surfaceMaxSlope: 75,
   surfaceTilt: false,
