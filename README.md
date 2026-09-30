@@ -23,7 +23,7 @@ La geometria viene da `BASE ROBOT.3dm` ed è salvata in `public/cell.bin` (≈2 
 node scripts/build-cell.mjs "/percorso/BASE ROBOT.3dm"
 ```
 
-Il robot sta nell'origine del mondo Rhino (il punto disegnato in `BASE ROBOT.3dm`), con la base 32 mm sotto il piano superiore delle tavole. Di conseguenza la BASE usata dal post-processore Python (1448, −1000, 5) è `BASE_DATA[1]` rispetto al robot.
+Il robot sta nel mondo Rhino a (0, −1000, 0): il punto disegnato in `BASE ROBOT.3dm` spostato di −1000 in Y, al centro del tavolo come la BASE, con la base 32 mm sotto il piano superiore delle tavole. La BASE del post-processore Python (1448, −1000, 5) in coordinate mondo risulta quindi a (1448, 0, 5) rispetto al robot.
 
 **Orientamento utensile.** L'asse del mandrino è l'asse Z del TCP, come calibrato sul robot: con A = −180°, B = 0° il parametro C inclina l'utensile (C 180 = verticale verso il basso, C 135 ≈ 45°, C 90 / 270 = orizzontale). Con A −180 / B 0 / C 180 il robot lavora in verticale sopra il punto.
 

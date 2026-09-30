@@ -10,10 +10,10 @@ describe('robot frames', () => {
   });
 
   it('works vertically: at A-180 B0 C180 the flange is straight above the nozzle', () => {
-    // TCP at BASE origin; BASE is at (1448, -1000, 5) from the robot root.
+    // TCP at BASE origin; BASE is at (1448, 0, 5) from the robot root.
     const f = flangeTarget([0, 0, 0], DEFAULT_ROBOT);
     expect(f.p[0]).toBeCloseTo(1448 - 78.111, 3);
-    expect(f.p[1]).toBeCloseTo(-1000, 3);
+    expect(f.p[1]).toBeCloseTo(0, 3);
     expect(f.p[2]).toBeCloseTo(5 + 372.65, 3);
     // flange normal (KUKA flange X) points down, like the spindle
     expect(f.R[6]).toBeCloseTo(-1, 6);
@@ -24,10 +24,10 @@ describe('robot frames', () => {
     expect(Math.abs(f.R[6])).toBeLessThan(1e-9);
   });
 
-  it('robot root sits 1448 / 1000 / 5 mm from BASE (Rhino world origin)', () => {
+  it('robot root sits 1448 mm behind BASE, same Y (world 0, -1000, 0)', () => {
     const r = robotRootInBase(DEFAULT_ROBOT);
     expect(r[0]).toBeCloseTo(-1448);
-    expect(r[1]).toBeCloseTo(1000);
+    expect(r[1]).toBeCloseTo(0);
     expect(r[2]).toBeCloseTo(-5);
   });
 
