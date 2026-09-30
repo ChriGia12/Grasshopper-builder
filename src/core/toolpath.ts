@@ -1,5 +1,6 @@
 // Turns the part into an ordered robot path: contour layers (planar or spiral / vase mode),
 // solid serpentine layers, or a non-planar serpentine over the top surface.
+import { msg, type Msg } from '../i18n';
 import { computeBounds, type MeshData } from './mesh';
 import { densify, pointInPolygon, polylineLength, rotateToNearest, signedArea, simplifyClosed, simplifyOpen, type Vec2 } from './polyline';
 import type { PrintMode, PrintSettings } from './settings';
@@ -28,7 +29,7 @@ export interface Toolpath {
   printLength: number; // mm
   travelLength: number; // mm
   travels: number;
-  warnings: string[];
+  warnings: Msg[];
   /** Solid serpentine: layers from this index on are blended (non-planar). */
   planarLayers?: number;
 }
@@ -130,12 +131,12 @@ export function buildToolpath(
   if (s.mode === 'surface') return buildSurface(mesh, s, startTarget ?? [b0.min[0], b0.min[1]]);
   const summary = summaryIn ?? sliceForPrint(mesh, s);
   const mode = resolveMode(summary, s);
-  const warnings: string[] = [];
+  const warnings: Msg[] = [];
   if (s.mode === 'spiral' && mode !== 'spiral')
-    warnings.push('Modalità spirale non possibile (più contorni per strato o più pareti): uso strati planari.');
+    warnings.push(msg('w.spiralImpossible'));
   if (summary.openLayers)
-    warnings.push(`${summary.openLayers} strati con contorni aperti: la mesh non è chiusa, controlla il modello.`);
-  if (summary.emptyLayers) warnings.push(`${summary.emptyLayers} strati vuoti.`);
+    warnings.push(msg('w.openLayers', { n: summary.openLayers }));
+  if (summary.emptyLayers) warnings.push(msg('w.emptyLayers', { n: summary.emptyLayers }));
 
   const b = computeBounds(mesh);
   const start: Vec2 = startTarget ?? [b.min[0], b.min[1]];
@@ -156,7 +157,7 @@ export function buildToolpath(
     cur = buildSpiral(tp, summary.layers.slice(a, b + 1), s, cur);
     buildPlanar(tp, summary.layers.slice(b + 1), s, cur);
     if (a > 0 || b < summary.layers.length - 1)
-      warnings.push(`Spirale sugli strati ${a + 1}–${b + 1}; ${summary.layers.length - (b - a + 1)} strati di bordo stampati planari.`);
+      warnings.push(msg('w.spiralRange', { a: a + 1, b: b + 1, n: summary.layers.length - (b - a + 1) }));
   } else if (mode === 'zigzag') buildZigzag(tp, mesh, summary.layers, s, start);
   else buildPlanar(tp, summary.layers, s, start);
   return tp;
@@ -487,7 +488,7 @@ function buildSurface(mesh: MeshData, s: PrintSettings, start: Vec2): Toolpath {
     tp.layerStart.push(tp.points.length);
     const runs = topSurfacePasses(mesh, surfaceOptions(s, k), hf);
     if (!runs.length) {
-      tp.warnings.push("Nessuna superficie superiore trovata: controlla l'orientamento del pezzo.");
+      tp.warnings.push(msg('w.noTopSurface'));
       break;
     }
     cur = printSurfaceRuns(tp, runs, s.firstLayerZ + k * s.layerHeight, s, cur);

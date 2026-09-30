@@ -1,6 +1,7 @@
 // Heavy geometry runs here so the page stays responsive on million-triangle models.
 import { analyzeOrientations } from './core/orientation';
 import { runBuild } from './core/pipeline';
+import { MsgError } from './i18n';
 import type { Mat3, MeshData } from './core/mesh';
 import type { PrintSettings, RobotSettings } from './core/settings';
 
@@ -34,6 +35,7 @@ self.onmessage = (ev: MessageEvent<WorkerRequest>) => {
       );
     }
   } catch (e) {
-    self.postMessage({ type: 'error', id: req.id, message: e instanceof Error ? e.message : String(e) });
+    // Translatable core errors travel as a message key; others as plain text.
+    self.postMessage({ type: 'error', id: req.id, message: e instanceof Error ? e.message : String(e), msg: e instanceof MsgError ? e.m : undefined });
   }
 };

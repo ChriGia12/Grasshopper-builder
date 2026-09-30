@@ -1,4 +1,5 @@
 // KUKA KRL writer. Output mirrors Tavolino1.src (header, extruder I/O, LIN C_DIS, homing).
+import { msg, MsgError } from '../i18n';
 import type { RobotSettings } from './settings';
 import type { PathPoint, Toolpath } from './toolpath';
 
@@ -51,7 +52,7 @@ function extruderOn(r: RobotSettings, title: string): string[] {
 }
 
 export function writeKukaSrc(tp: Toolpath, r: RobotSettings, _info?: SrcInfo): string {
-  if (!tp.points.length) throw new Error('Percorso vuoto: niente da esportare.');
+  if (!tp.points.length) throw new MsgError(msg('e.emptyPath'));
   const name = sanitizeProgramName(r.programName);
   const pts = tp.points;
   const safe = axes(r.safeAxes, true);

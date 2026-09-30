@@ -8,6 +8,7 @@ import { KR16, linkTransforms, poseAt, robotRootFrame, type Joints, type ReachRe
 import { DEFAULT_PRINT, DEFAULT_ROBOT, type PrintSettings, type RobotSettings } from './core/settings';
 import type { Toolpath } from './core/toolpath';
 import { Viewer } from './viewer';
+import { applyStatic, getLang, locale, msg, MsgError, setLang, t, tm, type Msg } from './i18n';
 import type { WorkerRequest } from './worker';
 
 // ---------- state ----------
@@ -85,17 +86,20 @@ function run<T>(kind: 'analyze' | 'build', req: RequestBody): Promise<T> {
       if (ev.data.id !== id) return;
       pool.busy = false;
       cancelers[kind] = null;
-      if (ev.data.type === 'error') reject(new Error(ev.data.message));
+      if (ev.data.type === 'error') reject(ev.data.msg ? new MsgError(ev.data.msg) : new Error(ev.data.message));
       else resolve(ev.data as T);
     };
     pool.worker.onerror = (e) => {
       pool.busy = false;
       cancelers[kind] = null;
-      reject(new Error(e.message || 'Errore nel worker'));
+      reject(e.message ? new Error(e.message) : new MsgError(msg('e.worker')));
     };
     pool.worker.postMessage({ ...req, id });
   });
 }
+
+/** Text of an error in the current language. */
+const errText = (e: unknown): Msg | string => (e instanceof MsgError ? e.m : e instanceof Error ? e.message : String(e));
 
 let busyCount = 0;
 async function busy<T>(text: string, fn: () => Promise<T>): Promise<T> {
@@ -115,7 +119,8 @@ async function busy<T>(text: string, fn: () => Promise<T>): Promise<T> {
 // reduced to the object standing on the work table.
 
 let pieceFormat = '';
-let pieceNotes: string[] = [];
+let pieceNotes: Msg[] = [];
+let pieceError: Msg | string | undefined;
 
 const fileInput = $<HTMLInputElement>('file');
 fileInput.accept = ACCEPTED;
@@ -136,8 +141,9 @@ drop.addEventListener('drop', (e) => {
   if (f) openFile(f);
 });
 
-function setNotes(notes: string[], error?: string) {
-  $('modelNotes').replaceChildren(...notes.map((n) => li(n)), ...(error ? [li(error, 'error')] : []));
+function setNotes(notes: Msg[], error?: Msg | string) {
+  pieceError = error;
+  $('modelNotes').replaceChildren(...notes.map((n) => li(tm(n))), ...(error ? [li(tm(error), 'error')] : []));
 }
 
 async function openFile(file: File) {
@@ -147,17 +153,18 @@ async function openFile(file: File) {
     bedSize: [robot.bedSizeX, robot.bedSizeY],
   };
   let piece: MeshData;
-  const notes: string[] = [];
+  const notes: Msg[] = [];
   try {
-    const model = await busy(`Lettura ${file.name}…`, () => loadModel(file));
+    const model = await busy(t('busy.read', { name: file.name }), () => loadModel(file));
     const { parts, note } = pickPieces(model, cell);
     if (note) notes.push(note);
-    if (!parts.length) throw new Error(note ?? 'Nessun oggetto stampabile nel file.');
+    if (!parts.length) throw new MsgError(note ?? msg('e.noPrintable'));
     piece = combineParts(parts);
-    notes.push(...model.notes.filter((n) => !/ignorati/.test(n)));
+    // Ignored blocks / curves are the rest of the scene: not worth a note.
+    notes.push(...model.notes.filter((n) => n.k !== 'n.blocks' && n.k !== 'n.skipped'));
     pieceFormat = model.format;
   } catch (e) {
-    setNotes(notes, e instanceof Error ? e.message : String(e));
+    setNotes(notes, errText(e));
     return;
   }
   pieceNotes = notes;
@@ -183,11 +190,11 @@ async function openFile(file: File) {
 function showModelInfo(m: MeshData) {
   const s = meshStats(m);
   const rows: [string, string][] = [
-    ['Formato', pieceFormat],
-    ['Triangoli', s.triangles.toLocaleString('it-IT')],
-    ['Dimensioni', `${s.size.map((v) => v.toFixed(1)).join(' × ')} mm`],
-    ['Chiusa', s.openEdges ? `no — ${s.openEdges} bordi aperti` : 'sì (watertight)'],
-    ['Volume', s.openEdges ? '—' : `${(s.volume / 1e6).toFixed(2)} L`],
+    [t('info.format'), pieceFormat],
+    [t('info.tris'), s.triangles.toLocaleString(locale())],
+    [t('info.size'), `${s.size.map((v) => v.toFixed(1)).join(' × ')} mm`],
+    [t('info.closed'), s.openEdges ? t('info.closed.no', { n: s.openEdges }) : t('info.closed.yes')],
+    [t('info.volume'), s.openEdges ? '—' : `${(s.volume / 1e6).toFixed(2)} L`],
   ];
   const dl = document.createElement('dl');
   dl.className = 'info';
@@ -203,13 +210,13 @@ async function analyze() {
   if (!mesh) return;
   const m = mesh;
   try {
-    const res = await busy('Analisi orientamenti…', () =>
+    const res = await busy(t('busy.orient'), () =>
       run<{ orientations: OrientationCandidate[] }>('analyze', { type: 'analyze', mesh: m, print: { ...print } }),
     );
     if (m !== mesh) return;
     orientations = res.orientations;
   } catch (e) {
-    if (!(e instanceof Superseded) && m === mesh) setNotes(pieceNotes, e instanceof Error ? e.message : String(e));
+    if (!(e instanceof Superseded) && m === mesh) setNotes(pieceNotes, errText(e));
     return;
   }
   orientIdx = 0;
@@ -221,20 +228,24 @@ async function analyze() {
 }
 
 function renderOrientations() {
+  // The section is folded by default: its title shows the orientation in use.
+  const cur = orientations[orientIdx];
+  $('orientChosen').textContent = cur ? t('orient.chosen', { label: tm(cur.label) }) : '';
   $('orientList').replaceChildren(
     ...orientations.map((o, i) => {
       const item = document.createElement('li');
       if (i === orientIdx) item.className = 'sel';
       const facts = [
-        `h ${o.height.toFixed(0)} mm`,
-        `appoggio ${(o.baseArea / 100).toFixed(0)} cm²`,
-        `sbalzi ${(o.overhangRatio * 100).toFixed(1)}%`,
-        o.maxIslands > 1 ? `${o.maxIslands} isole` : '1 contorno',
+        t('orient.h', { h: o.height.toFixed(0) }),
+        t('orient.base', { a: (o.baseArea / 100).toFixed(0) }),
+        t('orient.overhang', { p: (o.overhangRatio * 100).toFixed(1) }),
+        o.maxIslands > 1 ? t('orient.islands', { n: o.maxIslands }) : t('orient.oneLoop'),
       ].join(' · ');
+      const notes = o.notes.map((n) => escapeHtml(tm(n)));
       item.innerHTML =
-        `<span class="title">${escapeHtml(o.label)}</span>` +
-        (i === 0 ? '<span class="badge">Migliore</span>' : `<span class="muted">#${i + 1}</span>`) +
-        `<span class="sub">${facts}${o.notes.length ? '<br>' + o.notes.map(escapeHtml).join(' · ') : ''}</span>`;
+        `<span class="title">${escapeHtml(tm(o.label))}</span>` +
+        (i === 0 ? `<span class="badge">${escapeHtml(t('orient.best'))}</span>` : `<span class="muted">#${i + 1}</span>`) +
+        `<span class="sub">${facts}${notes.length ? '<br>' + notes.join(' · ') : ''}</span>`;
       item.onclick = () => {
         orientIdx = i;
         manual = [...IDENTITY] as Mat3;
@@ -263,88 +274,88 @@ type Field =
 const PRINT_FIELDS: Field[] = [
   {
     key: 'mode',
-    label: 'Modo di stampa',
+    label: 'f.mode',
     kind: 'select',
     full: true,
     options: [
-      ['planar', 'Contorno a strati: Z fissa per strato (come Tavolino1)'],
-      ['spiral', 'Contorno a spirale: Z sale lungo il giro (vase mode)'],
-      ['zigzag', 'Pieno a serpentina: ogni strato riempito a zig-zag'],
-      ['surface', 'Superficie superiore a serpentina (non planare)'],
+      ['planar', 'mode.planar'],
+      ['spiral', 'mode.spiral'],
+      ['zigzag', 'mode.zigzag'],
+      ['surface', 'mode.surface'],
     ],
   },
-  { key: 'layerHeight', label: 'Altezza strato (mm)', kind: 'number', step: 0.1, min: 0.1 },
-  { key: 'walls', label: 'Pareti (n°)', kind: 'number', step: 1, min: 1 },
-  { key: 'wallSpacing', label: 'Larghezza cordolo (mm)', kind: 'number', step: 0.5, min: 0.1 },
-  { key: 'tolerance', label: 'Tolleranza contorno (mm)', kind: 'number', step: 0.05, min: 0 },
-  { key: 'maxSegment', label: 'LIN max (mm, 0 = off)', kind: 'number', step: 1, min: 0 },
-  { key: 'minContourLength', label: 'Contorno minimo (mm)', kind: 'number', step: 1, min: 0 },
-  { key: 'maxBridge', label: 'Salto senza stop (mm)', kind: 'number', step: 1, min: 0 },
-  { key: 'travelLift', label: 'Sollevamento spost. (mm)', kind: 'number', step: 1, min: 0 },
-  { key: 'overhangAngle', label: 'Sbalzo critico (°)', kind: 'number', step: 1, min: 1 },
-  { key: 'thinWallMax', label: 'Guscio → linea media fino a (mm)', kind: 'number', step: 1, min: 0 },
-  { group: 'Serpentina (pieno e superficie)' },
-  { key: 'fillAngle', label: 'Direzione passate (°)', kind: 'number', step: 15 },
-  { key: 'fillAlternate', label: 'Alterna di 90° a ogni strato', kind: 'check', full: true },
-  { key: 'fillAutoAngle', label: 'Pieno: direzione automatica (meno interruzioni)', kind: 'check', full: true },
-  { key: 'fillPerimeter', label: 'Pieno: contorno esterno prima del riempimento', kind: 'check', full: true },
-  { key: 'fillTopSurface', label: 'Pieno: strati graduali fino alla superficie superiore (non planare)', kind: 'check', full: true },
-  { key: 'surfacePasses', label: 'Superficie: n° di strati', kind: 'number', step: 1, min: 1 },
-  { key: 'surfaceMaxSlope', label: 'Superficie: pendenza max (°)', kind: 'number', step: 5, min: 1 },
-  { key: 'surfaceTilt', label: 'Superficie: inclina utensile sulla normale (C)', kind: 'check', full: true },
-  { group: 'Punto iniziale' },
+  { key: 'layerHeight', label: 'f.layerHeight', kind: 'number', step: 0.1, min: 0.1 },
+  { key: 'walls', label: 'f.walls', kind: 'number', step: 1, min: 1 },
+  { key: 'wallSpacing', label: 'f.wallSpacing', kind: 'number', step: 0.5, min: 0.1 },
+  { key: 'tolerance', label: 'f.tolerance', kind: 'number', step: 0.05, min: 0 },
+  { key: 'maxSegment', label: 'f.maxSegment', kind: 'number', step: 1, min: 0 },
+  { key: 'minContourLength', label: 'f.minContourLength', kind: 'number', step: 1, min: 0 },
+  { key: 'maxBridge', label: 'f.maxBridge', kind: 'number', step: 1, min: 0 },
+  { key: 'travelLift', label: 'f.travelLift', kind: 'number', step: 1, min: 0 },
+  { key: 'overhangAngle', label: 'f.overhangAngle', kind: 'number', step: 1, min: 1 },
+  { key: 'thinWallMax', label: 'f.thinWallMax', kind: 'number', step: 1, min: 0 },
+  { group: 'g.serpentine' },
+  { key: 'fillAngle', label: 'f.fillAngle', kind: 'number', step: 15 },
+  { key: 'fillAlternate', label: 'f.fillAlternate', kind: 'check', full: true },
+  { key: 'fillAutoAngle', label: 'f.fillAutoAngle', kind: 'check', full: true },
+  { key: 'fillPerimeter', label: 'f.fillPerimeter', kind: 'check', full: true },
+  { key: 'fillTopSurface', label: 'f.fillTopSurface', kind: 'check', full: true },
+  { key: 'surfacePasses', label: 'f.surfacePasses', kind: 'number', step: 1, min: 1 },
+  { key: 'surfaceMaxSlope', label: 'f.surfaceMaxSlope', kind: 'number', step: 5, min: 1 },
+  { key: 'surfaceTilt', label: 'f.surfaceTilt', kind: 'check', full: true },
+  { group: 'g.start' },
   {
     key: 'startMode',
-    label: 'Punto iniziale',
+    label: 'f.startMode',
     kind: 'select',
     full: true,
     options: [
-      ['auto', 'Automatico (angolo davanti-sinistra)'],
-      ['point', 'Punto scelto (X/Y in BASE)'],
+      ['auto', 'start.auto'],
+      ['point', 'start.point'],
     ],
   },
-  { key: 'startX', label: 'Inizio X in BASE', kind: 'number', step: 5 },
-  { key: 'startY', label: 'Inizio Y in BASE', kind: 'number', step: 5 },
+  { key: 'startX', label: 'f.startX', kind: 'number', step: 5 },
+  { key: 'startY', label: 'f.startY', kind: 'number', step: 5 },
 ];
 
 const ROBOT_FIELDS: Field[] = [
-  { group: 'Programma' },
-  { key: 'programName', label: 'Nome programma (DEF)', kind: 'text', full: true },
+  { group: 'g.program' },
+  { key: 'programName', label: 'f.programName', kind: 'text', full: true },
   { key: 'toolNumber', label: 'TOOL_DATA[n]', kind: 'number', step: 1 },
   { key: 'baseNumber', label: 'BASE_DATA[n]', kind: 'number', step: 1 },
   { key: 'velCP', label: '$VEL.CP (m/s)', kind: 'number', step: 0.01 },
   { key: 'advance', label: '$ADVANCE', kind: 'number', step: 1 },
-  { group: 'Orientamento utensile' },
+  { group: 'g.toolOrient' },
   { key: 'a', label: 'A (°)', kind: 'number', step: 1 },
   { key: 'b', label: 'B (°)', kind: 'number', step: 1 },
   { key: 'c', label: 'C (°)', kind: 'number', step: 1 },
-  { group: 'Assi esterni' },
+  { group: 'g.external' },
   { key: 'e1', label: 'E1', kind: 'number', step: 1 },
   { key: 'e2', label: 'E2', kind: 'number', step: 1 },
   { key: 'e3', label: 'E3', kind: 'number', step: 1 },
   { key: 'e4', label: 'E4', kind: 'number', step: 1 },
-  { group: 'Estrusore' },
-  { key: 'extruderAnout', label: 'ANOUT on/off', kind: 'number', step: 1 },
-  { key: 'extruderSpeedAnout', label: 'ANOUT velocità', kind: 'number', step: 1 },
-  { key: 'extruderSpeed', label: 'Velocità (10 = 100%)', kind: 'number', step: 0.1 },
-  { key: 'extruderDelay', label: 'Attesa accensione (s)', kind: 'number', step: 0.5 },
-  { key: 'useHoming', label: 'Macro finale di homing', kind: 'check', full: true },
-  { group: 'Posizionamento sul piano' },
+  { group: 'g.extruder' },
+  { key: 'extruderAnout', label: 'f.extruderAnout', kind: 'number', step: 1 },
+  { key: 'extruderSpeedAnout', label: 'f.extruderSpeedAnout', kind: 'number', step: 1 },
+  { key: 'extruderSpeed', label: 'f.extruderSpeed', kind: 'number', step: 0.1 },
+  { key: 'extruderDelay', label: 'f.extruderDelay', kind: 'number', step: 0.5 },
+  { key: 'useHoming', label: 'f.useHoming', kind: 'check', full: true },
+  { group: 'g.placement' },
   {
     key: 'placement',
-    label: 'Posizione del pezzo',
+    label: 'f.placement',
     kind: 'select',
     full: true,
     options: [
-      ['origin', 'Centra sul punto indicato (BASE)'],
-      ['file', 'Mantieni posizione del file (mondo → BASE)'],
+      ['origin', 'place.origin'],
+      ['file', 'place.file'],
     ],
   },
-  { key: 'originX', label: 'Centro X in BASE', kind: 'number', step: 1 },
-  { key: 'originY', label: 'Centro Y in BASE', kind: 'number', step: 1 },
-  { key: 'originZ', label: 'Piano Z in BASE', kind: 'number', step: 0.5 },
-  { key: 'rotationZ', label: 'Rotazione pezzo Z (°)', kind: 'number', step: 15 },
-  { group: 'Posizione sicura (assi)' },
+  { key: 'originX', label: 'f.originX', kind: 'number', step: 1 },
+  { key: 'originY', label: 'f.originY', kind: 'number', step: 1 },
+  { key: 'originZ', label: 'f.originZ', kind: 'number', step: 0.5 },
+  { key: 'rotationZ', label: 'f.rotationZ', kind: 'number', step: 15 },
+  { group: 'g.safe' },
   ...[1, 2, 3, 4, 5, 6].map((n): Field => ({ key: `safeAxes.${n - 1}`, label: `A${n} (°)`, kind: 'number', step: 1 })),
 ];
 
@@ -361,14 +372,14 @@ function setPath(obj: Record<string, unknown>, key: string, v: unknown) {
 function renderFields(host: HTMLElement, fields: Field[], target: Record<string, unknown>, onChange: (key: string) => void) {
   host.replaceChildren(
     ...fields.map((f) => {
-      if ('group' in f) return Object.assign(document.createElement('div'), { className: 'group', textContent: f.group });
+      if ('group' in f) return Object.assign(document.createElement('div'), { className: 'group', textContent: t(f.group) });
       const wrap = document.createElement('label');
       wrap.className = 'field' + (f.full ? ' full' : '') + (f.kind === 'check' ? ' check' : '');
       const val = getPath(target, f.key);
       let input: HTMLInputElement | HTMLSelectElement;
       if (f.kind === 'select') {
         input = document.createElement('select');
-        for (const [v, t] of f.options!) input.append(new Option(t, v, false, v === val));
+        for (const [v, label] of f.options!) input.append(new Option(t(label), v, false, v === val));
       } else {
         input = document.createElement('input');
         input.type = f.kind === 'check' ? 'checkbox' : f.kind;
@@ -399,8 +410,8 @@ function renderFields(host: HTMLElement, fields: Field[], target: Record<string,
         setPath(target, f.key, v);
         onChange(f.key);
       });
-      if (f.kind === 'check') wrap.append(input, f.label);
-      else wrap.append(f.label, input);
+      if (f.kind === 'check') wrap.append(input, t(f.label));
+      else wrap.append(t(f.label), input);
       return wrap;
     }),
   );
@@ -464,16 +475,17 @@ async function build(): Promise<BuildMsg | null> {
   const m = mesh;
   let r: BuildMsg;
   try {
-    r = await busy('Calcolo percorso…', () =>
+    r = await busy(t('busy.path'), () =>
       run<BuildMsg>('build', { type: 'build', mesh: m, matrix, print: { ...print }, robot: structuredClone(robot), sourceName }),
     );
   } catch (e) {
-    if (!(e instanceof Superseded)) $('warnings').replaceChildren(li(e instanceof Error ? e.message : String(e)));
+    if (!(e instanceof Superseded)) $('warnings').replaceChildren(li(tm(errText(e))));
     return null;
   }
   if (m !== mesh) return null;
   lastSrc = r.src;
   currentMeta = r.meta;
+  lastBuild = r;
   viewer.setModel(r.mesh, r.offset, parseFloat($<HTMLInputElement>('opacity').value));
   viewer.setBed(robot.bedSizeX, robot.bedSizeY, [robot.bedCenterX, robot.bedCenterY, r.offset[2]]);
   viewer.setToolpath(r.xyz, r.ext, r.meta.layerStart, r.offset);
@@ -485,7 +497,6 @@ async function build(): Promise<BuildMsg | null> {
   $('vpTools').hidden = false;
   if (fitNext) viewer.fit();
   fitNext = false;
-  lastBuild = r;
   resetSim(r);
   renderStats(r);
   if (!$('srcPreview').hidden) showPreview();
@@ -501,10 +512,10 @@ function updateLayerLabel() {
   const blended = currentMeta.planarLayers !== undefined && i >= currentMeta.planarLayers;
   $('layerOut').textContent =
     currentMeta.mode === 'surface'
-      ? `passata ${i + 1} / ${n}`
+      ? t('layer.pass', { i: i + 1, n })
       : blended
-        ? `${i + 1} / ${n} · graduale (non planare)`
-        : `${i + 1} / ${n} · Z ${z.toFixed(1)}`;
+        ? t('layer.blend', { i: i + 1, n })
+        : t('layer.z', { i: i + 1, n, z: z.toFixed(1) });
 }
 $<HTMLInputElement>('layerSlider').addEventListener('input', (e) => {
   const layer = +(e.target as HTMLInputElement).value;
@@ -552,22 +563,22 @@ function setSimIndex(i: number, keepPos = false) {
   const q = poseAt(p, Number.isFinite(cPt) ? { ...robot, c } : robot, robotPose);
   if (q) showRobot(q);
   const f = (v: number) => v.toFixed(1);
-  const move = r.ext[simIndex] ? 'stampa' : 'spostamento (estrusore spento)';
+  const move = r.ext[simIndex] ? t('sim.print') : t('sim.travel');
   $('simReadout').innerHTML =
     `LIN ${simIndex + 1} / ${n} · ${move}\nX ${f(p[0])}  Y ${f(p[1])}  Z ${f(p[2])}  A ${robot.a}  B ${robot.b}  C ${f(c)}\n` +
-    (q ? q.map((v, k) => `A${k + 1} ${v.toFixed(1)}°`).join('  ') : '<span class="bad">punto fuori portata del robot</span>');
+    (q ? q.map((v, k) => `A${k + 1} ${v.toFixed(1)}°`).join('  ') : `<span class="bad">${escapeHtml(t('sim.unreachable'))}</span>`);
 }
 
 function stopSim() {
   playing = false;
-  $('playBtn').textContent = '▶ Simula';
+  $('playBtn').textContent = t('sim.play');
 }
 
-function tick(t: number) {
+function tick(now: number) {
   if (!playing || !lastBuild) return;
   // rAF timestamps can precede the click time: never step backwards, cap long pauses.
-  const dt = Math.max(0, Math.min(0.1, (t - lastFrame) / 1000));
-  lastFrame = t;
+  const dt = Math.max(0, Math.min(0.1, (now - lastFrame) / 1000));
+  lastFrame = now;
   simPos += dt * robot.velCP * 1000 * +$<HTMLSelectElement>('simSpeed').value;
   let i = simIndex;
   while (i < simCum.length - 1 && simCum[i + 1] <= simPos) i++;
@@ -581,7 +592,7 @@ $('playBtn').onclick = () => {
   if (playing) return stopSim();
   if (simIndex >= simCum.length - 1) setSimIndex(0);
   playing = true;
-  $('playBtn').textContent = '⏸ Pausa';
+  $('playBtn').textContent = t('sim.pause');
   lastFrame = performance.now();
   requestAnimationFrame(tick);
 };
@@ -606,7 +617,7 @@ viewer
     showRobot(robotPose);
     if (!mesh) viewer.fit();
   })
-  .catch(() => setNotes([], 'Impossibile caricare la cella del robot (cell.bin).'));
+  .catch(() => setNotes([], msg('e.cell')));
 
 // ---------- click-to-place / click-to-start ----------
 
@@ -617,7 +628,7 @@ function setPick(mode: 'none' | 'place' | 'start') {
   $('placeBtn').classList.toggle('active', pick === 'place');
   $('startBtn').classList.toggle('active', pick === 'start');
   $('pickHint').hidden = pick === 'none';
-  $('pickHint').textContent = pick === 'place' ? 'Clicca sul piano dove mettere il centro del pezzo' : 'Clicca vicino al punto dove iniziare a stampare';
+  $('pickHint').textContent = pick === 'place' ? t('pick.place') : t('pick.start');
 }
 $('placeBtn').onclick = () => setPick('place');
 $('startBtn').onclick = () => setPick('start');
@@ -642,37 +653,30 @@ function fmtTime(sec: number) {
 }
 
 function renderStats(r: BuildMsg) {
-  const t = r.meta;
-  const seconds = (t.printLength + t.travelLength) / (robot.velCP * 1000) + t.travels * robot.extruderDelay;
+  const tp = r.meta;
+  const seconds = (tp.printLength + tp.travelLength) / (robot.velCP * 1000) + tp.travels * robot.extruderDelay;
   const kb = new Blob([r.src]).size / 1024;
-  const stops = t.travels ? ` ${t.travels} spostamenti con estrusore spento.` : ' Estrusore mai fermo.';
-  const modeText =
-    {
-      spiral: 'Contorno a spirale — la Z sale lungo il contorno, nessuna giunzione.',
-      planar: 'Contorno a strati — Z fissa per strato, cambio strato sulla stessa verticale (come Tavolino1).',
-      zigzag: 'Pieno a serpentina — ogni strato riempito con passate a zig-zag.',
-      surface: 'Superficie superiore a serpentina — ogni punto segue l’altezza della superficie (non planare).',
-    }[t.mode] + stops;
+  const stops = ' ' + (tp.travels ? t('r.stops', { n: tp.travels }) : t('r.noStops'));
   const items: [string, string, boolean?][] = [
-    ['Modo scelto', modeText, true],
-    ['Strati', `${t.layerCount}`],
-    ['Punti LIN', `${r.xyz.length / 3}`],
-    ['Lunghezza stampa', `${(t.printLength / 1000).toFixed(2)} m`],
-    ['Tempo stimato', fmtTime(seconds)],
+    [t('r.mode'), t(`r.mode.${tp.mode}`) + stops, true],
+    [t('r.layers'), `${tp.layerCount}`],
+    [t('r.points'), (r.xyz.length / 3).toLocaleString(locale())],
+    [t('r.length'), `${(tp.printLength / 1000).toFixed(2)} m`],
+    [t('r.time'), fmtTime(seconds)],
     [
-      'Estensione in BASE (mm)',
+      t('r.extent'),
       `X ${r.min[0].toFixed(1)} … ${r.max[0].toFixed(1)}\nY ${r.min[1].toFixed(1)} … ${r.max[1].toFixed(1)}\nZ ${r.min[2].toFixed(1)} … ${r.max[2].toFixed(1)}`,
       true,
     ],
     [
-      'Assi robot (min … max)',
+      t('r.axes'),
       r.reach.unreachable === r.xyz.length / 3
-        ? 'nessun punto raggiungibile'
+        ? t('r.axes.none')
         : r.reach.jointMin.map((v, i) => `A${i + 1} ${v.toFixed(0)} … ${r.reach.jointMax[i].toFixed(0)}°`).join('\n'),
       true,
     ],
-    ['File .src', kb > 1024 ? `${(kb / 1024).toFixed(1)} MB` : `${kb.toFixed(0)} KB`],
-    ['Materiale ≈', `${((t.printLength * print.layerHeight * print.wallSpacing) / 1e6).toFixed(2)} L`],
+    [t('r.file'), kb > 1024 ? `${(kb / 1024).toFixed(1)} MB` : `${kb.toFixed(0)} KB`],
+    [t('r.material'), `${((tp.printLength * print.layerHeight * print.wallSpacing) / 1e6).toFixed(2)} L`],
   ];
   $('stats').replaceChildren(
     ...items.map(([k, v, wide]) => {
@@ -684,11 +688,17 @@ function renderStats(r: BuildMsg) {
       return d;
     }),
   );
-  $('warnings').replaceChildren(...t.warnings.map((w) => li(w)));
+  // A path the robot cannot follow must not reach the controller: block the export.
+  const blocked = r.reach.unreachable > 0 || r.reach.outOfLimits > 0;
+  $<HTMLButtonElement>('download').disabled = blocked;
+  $('warnings').replaceChildren(
+    ...(blocked ? [li(t('out.blocked'), 'blocked')] : []),
+    ...tp.warnings.map((w) => li(tm(w))),
+  );
 }
 
 $('download').onclick = () => {
-  if (!lastSrc) return;
+  if (!lastSrc || !lastBuild || lastBuild.reach.unreachable > 0 || lastBuild.reach.outOfLimits > 0) return;
   const a = document.createElement('a');
   a.href = URL.createObjectURL(new Blob([lastSrc], { type: 'text/plain' }));
   a.download = sanitizeProgramName(robot.programName) + '.src';
@@ -706,3 +716,27 @@ $('previewBtn').onclick = () => {
   pre.hidden = !pre.hidden;
   if (!pre.hidden) showPreview();
 };
+
+// ---------- language ----------
+
+function applyLanguage() {
+  applyStatic();
+  $('langToggle').textContent = getLang() === 'it' ? 'EN' : 'IT';
+  renderPrintFields();
+  renderRobotFields();
+  if (orientations.length) renderOrientations();
+  if (mesh) showModelInfo(mesh);
+  setNotes(pieceNotes, pieceError);
+  if (lastBuild) {
+    renderStats(lastBuild);
+    setSimIndex(simIndex, true);
+    updateLayerLabel();
+  }
+  $('playBtn').textContent = t(playing ? 'sim.pause' : 'sim.play');
+  if (pick !== 'none') $('pickHint').textContent = pick === 'place' ? t('pick.place') : t('pick.start');
+}
+$('langToggle').onclick = () => {
+  setLang(getLang() === 'it' ? 'en' : 'it');
+  applyLanguage();
+};
+applyLanguage();

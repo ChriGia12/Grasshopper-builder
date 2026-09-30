@@ -1,4 +1,5 @@
 // End-to-end build used by the worker: orient → slice → toolpath → KUKA .src.
+import { msg } from '../i18n';
 import { writeKukaSrc } from './kuka';
 import { applyMatrix, computeBounds, dropToOrigin, mulMat3, rotZ, type Mat3, type MeshData } from './mesh';
 import type { PrintSettings, RobotSettings } from './settings';
@@ -57,17 +58,15 @@ export function runBuild(
   const bx0 = robot.bedCenterX - robot.bedSizeX / 2;
   const by0 = robot.bedCenterY - robot.bedSizeY / 2;
   if (min[0] < bx0 || min[1] < by0 || max[0] > bx0 + robot.bedSizeX || max[1] > by0 + robot.bedSizeY)
-    toolpath.warnings.push(
-      `Il percorso esce dal piano (${robot.bedSizeX}×${robot.bedSizeY} mm centrato in X ${robot.bedCenterX}, Y ${robot.bedCenterY}): sposta o ruota il pezzo.`,
-    );
-  if (min[2] < 0) toolpath.warnings.push('Alcuni punti hanno Z negativa nel sistema BASE: controlla la posizione.');
+    toolpath.warnings.push(msg('w.offBed', { sx: robot.bedSizeX, sy: robot.bedSizeY, cx: robot.bedCenterX, cy: robot.bedCenterY }));
+  if (min[2] < 0) toolpath.warnings.push(msg('w.negativeZ'));
 
   const basePts = new Float64Array(toolpath.points.length * 3);
   toolpath.points.forEach((p, i) => basePts.set([p.x + offset[0], p.y + offset[1], p.z + offset[2]], i * 3));
   const cs = Float64Array.from(toolpath.points, (p) => p.c ?? NaN);
   const reach = reachReport(basePts, robot, cs);
   if (reach.unreachable)
-    toolpath.warnings.push(`${reach.unreachable} punti fuori portata del robot con questo orientamento utensile: avvicina il pezzo al robot.`);
-  if (reach.outOfLimits) toolpath.warnings.push(`${reach.outOfLimits} punti richiedono assi oltre i limiti del KR16.`);
+    toolpath.warnings.push(msg('w.unreachable', { n: reach.unreachable }));
+  if (reach.outOfLimits) toolpath.warnings.push(msg('w.limits', { n: reach.outOfLimits }));
   return { toolpath, src, offset, mesh, min, max, reach };
 }

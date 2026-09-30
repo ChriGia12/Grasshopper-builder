@@ -1,6 +1,7 @@
 // File importers → parts in mm, Z up. Mesh formats via three.js loaders; Rhino .3dm via
 // rhino3dm (meshes + cached render meshes of Breps/Extrusions); STEP/IGES/BREP via OpenCascade.
 // Every object keeps its layer so the user can pick the piece out of a whole robot-cell scene.
+import { msg, MsgError, type Msg } from '../i18n';
 import { BufferGeometry, Mesh as ThreeMesh, type Object3D } from 'three';
 import { STLLoader } from 'three/examples/jsm/loaders/STLLoader.js';
 import { OBJLoader } from 'three/examples/jsm/loaders/OBJLoader.js';
@@ -24,7 +25,7 @@ export interface ModelPart {
 export interface LoadedModel {
   format: string;
   parts: ModelPart[];
-  notes: string[];
+  notes: Msg[];
 }
 
 function fromGeometry(g: BufferGeometry): MeshData {
@@ -47,7 +48,7 @@ function fromObject3D(root: Object3D): ModelPart[] {
     if ((o as ThreeMesh).isMesh) {
       const g = (o as ThreeMesh).geometry.clone();
       g.applyMatrix4(o.matrixWorld);
-      parts.push({ id: parts.length, layer: o.name || 'Oggetto', name: o.name, type: 'Mesh', visible: true, mesh: fromGeometry(g) });
+      parts.push({ id: parts.length, layer: o.name || 'Oggetto', name: o.name, type: 'type.mesh', visible: true, mesh: fromGeometry(g) });
     }
   });
   return parts;
@@ -87,8 +88,8 @@ function rhinoMeshToData(m: Any): MeshData | null {
 
 export function parse3dm(rhino: Any, bytes: Uint8Array): LoadedModel {
   const doc = rhino.File3dm.fromByteArray(bytes);
-  if (!doc) throw new Error('File .3dm non leggibile.');
-  const notes: string[] = [];
+  if (!doc) throw new MsgError(msg('e.3dm'));
+  const notes: Msg[] = [];
   const unit = doc.settings().modelUnitSystem;
   let unitScale = 1;
   for (const [k, v] of Object.entries(UNIT_TO_MM)) if (rhino.UnitSystem[k] === unit) unitScale = v;
@@ -113,11 +114,11 @@ export function parse3dm(rhino: Any, bytes: Uint8Array): LoadedModel {
     const meshes: MeshData[] = [];
     let typeName = '';
     if (type === rhino.ObjectType.Mesh) {
-      typeName = 'Mesh';
+      typeName = 'type.mesh';
       const d = rhinoMeshToData(g);
       if (d) meshes.push(d);
     } else if (type === rhino.ObjectType.Brep) {
-      typeName = 'Polisuperficie';
+      typeName = 'type.brep';
       const faces = g.faces();
       for (let f = 0; f < faces.count; f++) {
         const d = rhinoMeshToData(faces.get(f).getMesh(rhino.MeshType.Any));
@@ -125,12 +126,12 @@ export function parse3dm(rhino: Any, bytes: Uint8Array): LoadedModel {
       }
       if (!meshes.length) brepsNoMesh++;
     } else if (type === rhino.ObjectType.Extrusion) {
-      typeName = 'Estrusione';
+      typeName = 'type.extrusion';
       const d = rhinoMeshToData(g.getMesh(rhino.MeshType.Any));
       if (d) meshes.push(d);
       else brepsNoMesh++;
     } else if (type === rhino.ObjectType.SubD) {
-      typeName = 'SubD (rete controllo)';
+      typeName = 'type.subd';
       const d = rhinoMeshToData(rhino.Mesh.createFromSubDControlNet?.(g));
       if (d) meshes.push(d);
     } else if (type === rhino.ObjectType.InstanceReference) {
@@ -154,13 +155,11 @@ export function parse3dm(rhino: Any, bytes: Uint8Array): LoadedModel {
     });
   }
   if (brepsNoMesh)
-    notes.push(
-      `${brepsNoMesh} polisuperfici senza mesh di render salvata: in Rhino passa in vista ombreggiata e salva (non "Salva piccolo"), oppure esporta STEP/STL.`,
-    );
-  if (blocks) notes.push(`${blocks} blocchi (istanze) ignorati: esplodili in Rhino se contengono il pezzo.`);
-  if (skipped) notes.push(`${skipped} oggetti non solidi ignorati (curve, punti, quote...).`);
-  if (unitScale !== 1) notes.push(`Unità del file convertite in mm (×${unitScale}).`);
-  if (!parts.length) throw new Error('Nessuna geometria stampabile nel .3dm. ' + notes.join(' '));
+    notes.push(msg('n.brepNoMesh', { n: brepsNoMesh }));
+  if (blocks) notes.push(msg('n.blocks', { n: blocks }));
+  if (skipped) notes.push(msg('n.skipped', { n: skipped }));
+  if (unitScale !== 1) notes.push(msg('n.units', { s: unitScale }));
+  if (!parts.length) throw new MsgError(msg('e.3dmEmpty'));
   return { format: '3DM', parts, notes };
 }
 
@@ -173,7 +172,7 @@ function loadOcct(): Promise<Any> {
     s.src = OCCT_URL;
     s.onload = () =>
       (window as Any).occtimportjs({ locateFile: (f: string) => OCCT_URL.replace(/[^/]+$/, f) }).then(resolve, reject);
-    s.onerror = () => reject(new Error('Impossibile caricare OpenCascade (serve connessione internet).'));
+    s.onerror = () => reject(new MsgError(msg('e.occtLoad')));
     document.head.appendChild(s);
   });
   return occtPromise;
@@ -188,16 +187,16 @@ async function parseCad(bytes: Uint8Array, ext: string): Promise<LoadedModel> {
       : ext === 'iges' || ext === 'igs'
         ? occt.ReadIgesFile(bytes, params)
         : occt.ReadStepFile(bytes, params);
-  if (!res.success || !res.meshes.length) throw new Error('OpenCascade non è riuscito a leggere il file.');
+  if (!res.success || !res.meshes.length) throw new MsgError(msg('e.occt'));
   const parts: ModelPart[] = res.meshes.map((m: Any, i: number) => ({
     id: i,
     layer: m.name || `Solido ${i + 1}`,
     name: m.name || '',
-    type: 'BREP',
+    type: 'type.brep',
     visible: true,
     mesh: { positions: Float32Array.from(m.attributes.position.array), indices: Uint32Array.from(m.index.array) },
   }));
-  return { format: ext.toUpperCase(), parts, notes: ['BREP tassellato con tolleranza 0.1 mm.'] };
+  return { format: ext.toUpperCase(), parts, notes: [msg('n.brep')] };
 }
 
 // ---------- entry points ----------
@@ -205,18 +204,18 @@ async function parseCad(bytes: Uint8Array, ext: string): Promise<LoadedModel> {
 export async function loadModel(file: File): Promise<LoadedModel> {
   const ext = file.name.split('.').pop()!.toLowerCase();
   const buf = await file.arrayBuffer();
-  const single = (mesh: MeshData, format: string, notes: string[]): LoadedModel => ({
+  const single = (mesh: MeshData, format: string, notes: Msg[]): LoadedModel => ({
     format,
     notes,
-    parts: [{ id: 0, layer: file.name, name: file.name, type: 'Mesh', visible: true, mesh }],
+    parts: [{ id: 0, layer: file.name, name: file.name, type: 'type.mesh', visible: true, mesh }],
   });
   switch (ext) {
     case 'stl':
-      return single(fromGeometry(new STLLoader().parse(buf)), 'STL', ['STL senza unità: assunto in mm.']);
+      return single(fromGeometry(new STLLoader().parse(buf)), 'STL', [msg('n.stl')]);
     case 'ply':
       return single(fromGeometry(new PLYLoader().parse(buf)), 'PLY', []);
     case 'obj':
-      return { format: 'OBJ', parts: fromObject3D(new OBJLoader().parse(new TextDecoder().decode(buf))), notes: ['OBJ senza unità: assunto in mm.'] };
+      return { format: 'OBJ', parts: fromObject3D(new OBJLoader().parse(new TextDecoder().decode(buf))), notes: [msg('n.obj')] };
     case '3dm':
       return parse3dm(await loadRhino(), new Uint8Array(buf));
     case 'step':
@@ -226,15 +225,15 @@ export async function loadModel(file: File): Promise<LoadedModel> {
     case 'brep':
       return parseCad(new Uint8Array(buf), ext);
     default:
-      throw new Error(`Formato .${ext} non supportato. Usa: ${ACCEPTED}`);
+      throw new MsgError(msg('e.format', { ext, list: ACCEPTED }));
   }
 }
 
 /** Merge the chosen parts into one clean, welded, outward-facing mesh. */
 export function combineParts(parts: ModelPart[]): MeshData {
-  if (!parts.length) throw new Error('Seleziona almeno un oggetto.');
+  if (!parts.length) throw new MsgError(msg('e.noParts'));
   const mesh = orientOutward(weld(mergeMeshes(parts.map((p) => p.mesh)), 1e-3));
-  if (!mesh.indices.length) throw new Error('Gli oggetti selezionati non contengono triangoli.');
+  if (!mesh.indices.length) throw new MsgError(msg('e.noTris'));
   return mesh;
 }
 
@@ -243,7 +242,7 @@ export function partSize(p: ModelPart): [number, number, number] {
   return [b.max[0] - b.min[0], b.max[1] - b.min[1], b.max[2] - b.min[2]];
 }
 
-const TYPE_PRIORITY: Record<string, number> = { Mesh: 0, Polisuperficie: 1, BREP: 1, Estrusione: 2, 'SubD (rete controllo)': 3 };
+const TYPE_PRIORITY: Record<string, number> = { 'type.mesh': 0, 'type.brep': 1, 'type.extrusion': 2, 'type.subd': 3 };
 
 export interface CellRegion {
   /** BASE origin in world coordinates (worldBaseX/Y/Z). */
@@ -277,7 +276,7 @@ function dedupe(items: { p: ModelPart; b: Box }[]): { parts: ModelPart[]; b: Box
  * area (world → BASE) and rests near its surface; drop duplicates and small leftovers.
  * Files with a few objects (a piece or a set of pieces) are taken as they are.
  */
-export function pickPieces(model: LoadedModel, cell: CellRegion): { parts: ModelPart[]; note: string | null } {
+export function pickPieces(model: LoadedModel, cell: CellRegion): { parts: ModelPart[]; note: Msg | null } {
   // A file with a few objects is the piece itself (e.g. a BREP split in solids): merge them all.
   if (model.parts.length <= 5) {
     const g = dedupe(model.parts.map((p) => ({ p, b: computeBounds(p.mesh) })));
@@ -299,10 +298,10 @@ export function pickPieces(model: LoadedModel, cell: CellRegion): { parts: Model
   if (!groups.length)
     return {
       parts: [],
-      note: `Il file contiene ${model.parts.length} oggetti ma nessuno sul piano di lavoro: esporta da Rhino solo il pezzo (Esporta selezionati) e ricaricalo.`,
+      note: msg('n.sceneEmpty', { n: model.parts.length }),
     };
   // One piece only: the biggest object standing on the table.
   const parts = groups[0].parts;
-  const names = parts.map((p) => `${p.type}${p.name ? ' ' + p.name : ''} (layer "${p.layer}")`).join(', ');
-  return { parts, note: `Scena Rhino con ${model.parts.length} oggetti: usato solo ciò che sta sul piano → ${names}.` };
+  const names = parts.map((p) => p.layer).join('", "');
+  return { parts, note: msg('n.scenePicked', { n: model.parts.length, names }) };
 }

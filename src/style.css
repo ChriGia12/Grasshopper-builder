@@ -213,3 +213,9 @@ button.active { background: var(--accent); color: var(--accent-ink); border-colo
 .sim select { font: inherit; font-size: 12.5px; color: var(--text); background: var(--bg); border: 1px solid var(--border); border-radius: 6px; padding: 3px 6px; }
 .sim-readout { flex: 1 1 100%; font-family: var(--mono); font-size: 11.5px; color: var(--text); white-space: pre-wrap; line-height: 1.5; }
 .sim-readout .bad { color: var(--danger); font-weight: 600; }
+
+.lang-toggle { margin-left: auto; font-weight: 650; min-width: 2.8em; }
+.busy:not([hidden]) ~ .lang-toggle { margin-left: 12px; }
+.card h2 .chosen { margin-left: 8px; font-size: 12.5px; font-weight: 500; color: var(--muted); }
+details[open] .card h2 .chosen, details[open] summary .chosen { display: none; }
+.warnings li.blocked { background: color-mix(in srgb, var(--danger) 15%, transparent); color: var(--danger); font-weight: 600; }

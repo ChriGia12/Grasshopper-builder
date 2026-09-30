@@ -1,6 +1,7 @@
 // Finds the best print orientation. Candidates: ±X/±Y/±Z plus the largest convex-hull facets
 // (the faces a part can physically rest on). Each is scored on overhangs, unsupported islands,
 // travel moves (extruder stops are bad for continuous extrusion), stability and height.
+import { msg, type Msg } from '../i18n';
 import { ConvexHull } from 'three/examples/jsm/math/ConvexHull.js';
 import { Vector3 } from 'three';
 import { applyMatrix, computeBounds, dropToOrigin, rotationBetween, type Mat3, type MeshData } from './mesh';
@@ -10,7 +11,7 @@ import { collapseThinWalls } from './walls';
 
 export interface OrientationCandidate {
   id: number;
-  label: string;
+  label: Msg;
   down: [number, number, number]; // model direction that ends up pointing to the bed
   matrix: Mat3;
   height: number;
@@ -20,16 +21,16 @@ export interface OrientationCandidate {
   maxIslands: number; // max separate outer contours in one layer
   singleLoop: boolean; // ≥ 90% of sampled layers are one closed contour → spiral possible
   score: number; // lower is better
-  notes: string[];
+  notes: Msg[];
 }
 
-const AXES: { label: string; down: [number, number, number] }[] = [
-  { label: 'Come importato', down: [0, 0, -1] },
-  { label: 'Capovolto', down: [0, 0, 1] },
-  { label: 'Sul fianco −Y', down: [0, -1, 0] },
-  { label: 'Sul fianco +Y', down: [0, 1, 0] },
-  { label: 'Sul fianco −X', down: [-1, 0, 0] },
-  { label: 'Sul fianco +X', down: [1, 0, 0] },
+const AXES: { label: Msg; down: [number, number, number] }[] = [
+  { label: msg('o.asImported'), down: [0, 0, -1] },
+  { label: msg('o.upsideDown'), down: [0, 0, 1] },
+  { label: msg('o.sideMinusY'), down: [0, -1, 0] },
+  { label: msg('o.sidePlusY'), down: [0, 1, 0] },
+  { label: msg('o.sideMinusX'), down: [-1, 0, 0] },
+  { label: msg('o.sidePlusX'), down: [1, 0, 0] },
 ];
 
 function hullFacets(mesh: MeshData, max: number): [number, number, number][] {
@@ -125,7 +126,7 @@ export function analyzeOrientations(mesh: MeshData, overhangDeg: number, layerHe
   const candidates = [...AXES];
   hullFacets(mesh, 8).forEach((d, i) => {
     if (!candidates.some((c) => c.down[0] * d[0] + c.down[1] * d[1] + c.down[2] * d[2] > 0.995))
-      candidates.push({ label: `Appoggio su faccia piana ${i + 1}`, down: d });
+      candidates.push({ label: msg('o.face', { n: i + 1 }), down: d });
   });
 
   const evals = candidates.map((c) => ({ c, e: evaluateOrientation(mesh, c.down, overhangDeg, layerHeight, thinWallMax) }));
@@ -136,12 +137,12 @@ export function analyzeOrientations(mesh: MeshData, overhangDeg: number, layerHe
     .map(({ c, e }, id): OrientationCandidate => {
       const overhangRatio = e.totalArea ? e.overhangArea / e.totalArea : 0;
       const baseRatio = e.baseArea / maxBase;
-      const notes: string[] = [];
-      if (e.unsupported) notes.push(`${e.unsupported} isole senza appoggio (partono nel vuoto)`);
-      if (overhangRatio > 0.02) notes.push(`${(overhangRatio * 100).toFixed(1)}% di superficie in sbalzo oltre il limite`);
-      if (e.maxIslands > 1) notes.push(`fino a ${e.maxIslands} contorni separati per strato → stop estrusore`);
-      if (e.singleLoop) notes.push('un solo contorno per strato → spirale continua possibile');
-      if (baseRatio < 0.05) notes.push('appoggio sul piano molto piccolo');
+      const notes: Msg[] = [];
+      if (e.unsupported) notes.push(msg('o.note.unsupported', { n: e.unsupported }));
+      if (overhangRatio > 0.02) notes.push(msg('o.note.overhang', { p: (overhangRatio * 100).toFixed(1) }));
+      if (e.maxIslands > 1) notes.push(msg('o.note.islands', { n: e.maxIslands }));
+      if (e.singleLoop) notes.push(msg('o.note.single'));
+      if (baseRatio < 0.05) notes.push(msg('o.note.smallBase'));
       const score =
         4 * overhangRatio +
         1.5 * Math.min(1, e.unsupported / 2) +

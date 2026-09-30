@@ -13,19 +13,20 @@
         <svg viewBox="0 0 32 32" width="22" height="22" aria-hidden="true"><path d="M6 26h20M9 22h14M12 18h8M14 14h4M15.5 6v8" stroke="currentColor" stroke-width="3" stroke-linecap="round" fill="none"/></svg>
         <span>KinePath</span>
       </div>
-      <span class="tagline">mesh / BREP → percorso a contorno → KUKA .src</span>
-      <div id="busy" class="busy" hidden><span class="spinner"></span><span id="busyText">Calcolo…</span></div>
+      <span class="tagline" data-i18n="tagline">mesh / BREP → percorso a contorno → KUKA .src</span>
+      <div id="busy" class="busy" hidden><span class="spinner"></span><span id="busyText" data-i18n="busy">Calcolo…</span></div>
+      <button class="ghost small lang-toggle" id="langToggle" title="Cambia lingua del sito" data-i18n-title="lang.toggle.title">EN</button>
     </header>
 
     <main class="layout">
       <aside class="panel" id="panel">
         <section class="card" id="step-model">
-          <h2><span class="num">1</span>Modello</h2>
+          <h2><span class="num">1</span><span data-i18n="step.model">Modello</span></h2>
           <label class="drop" id="drop">
             <input type="file" id="file" hidden />
-            <strong>Trascina qui il file</strong>
-            <span>oppure clicca per sceglierlo</span>
-            <small>Solo il pezzo, una mesh o un BREP: robot, piano e mandrino sono già nella cella.<br>STL · OBJ · PLY · 3DM · STEP · IGES · BREP</small>
+            <strong data-i18n="drop.title">Trascina qui il file</strong>
+            <span data-i18n="drop.or">oppure clicca per sceglierlo</span>
+            <small><span data-i18n="drop.hint">Solo il pezzo, una mesh o un BREP: robot, piano e mandrino sono già nella cella.</span><br>STL · OBJ · PLY · 3DM · STEP · IGES · BREP</small>
           </label>
           <div id="modelInfo" class="info" hidden></div>
           <div id="pieceName" class="piece-name" hidden></div>
@@ -33,38 +34,40 @@
         </section>
 
         <section class="card" id="step-orient" hidden>
-          <h2><span class="num">2</span>Orientamento</h2>
-          <p class="hint">Ordinate dalla migliore. Clicca per sceglierne un'altra.</p>
-          <ol id="orientList" class="orient-list"></ol>
-          <div class="row gap">
-            <span class="muted">Ruota a mano:</span>
-            <button class="ghost small" data-rot="x">X +90°</button>
-            <button class="ghost small" data-rot="y">Y +90°</button>
-            <button class="ghost small" data-rot="z">Z +90°</button>
-          </div>
+          <details>
+            <summary><h2><span class="num">2</span><span data-i18n="step.orient">Orientamento</span><span id="orientChosen" class="chosen"></span></h2></summary>
+            <p class="hint" data-i18n="orient.hint">Ordinate dalla migliore. Clicca per sceglierne un'altra.</p>
+            <ol id="orientList" class="orient-list"></ol>
+            <div class="row gap">
+              <span class="muted" data-i18n="orient.rotate">Ruota a mano:</span>
+              <button class="ghost small" data-rot="x">X +90°</button>
+              <button class="ghost small" data-rot="y">Y +90°</button>
+              <button class="ghost small" data-rot="z">Z +90°</button>
+            </div>
+          </details>
         </section>
 
         <section class="card" id="step-print" hidden>
-          <h2><span class="num">3</span>Stampa</h2>
+          <h2><span class="num">3</span><span data-i18n="step.print">Stampa</span></h2>
           <div id="printFields" class="fields"></div>
         </section>
 
         <section class="card" id="step-robot" hidden>
           <details>
-            <summary><h2><span class="num">4</span>Robot KUKA e piano</h2></summary>
-            <p class="hint">Valori iniziali presi da Tavolino1.src e dal post-processore Python. Restano salvati nel browser.</p>
+            <summary><h2><span class="num">4</span><span data-i18n="step.robot">Robot KUKA e piano</span></h2></summary>
+            <p class="hint" data-i18n="robot.hint">Valori iniziali presi da Tavolino1.src e dal post-processore Python. Restano salvati nel browser.</p>
             <div id="robotFields" class="fields"></div>
-            <button class="ghost small" id="resetRobot">Ripristina valori Tavolino1</button>
+            <button class="ghost small" id="resetRobot" data-i18n="robot.reset">Ripristina valori Tavolino1</button>
           </details>
         </section>
 
         <section class="card" id="step-out" hidden>
-          <h2><span class="num">5</span>Risultato</h2>
+          <h2><span class="num">5</span><span data-i18n="step.out">Risultato</span></h2>
           <div id="stats" class="stats"></div>
           <ul id="warnings" class="warnings"></ul>
           <div class="row gap">
-            <button id="download" class="primary">Scarica .src</button>
-            <button id="previewBtn" class="ghost">Anteprima codice</button>
+            <button id="download" class="primary" data-i18n="out.download">Scarica .src</button>
+            <button id="previewBtn" class="ghost" data-i18n="out.preview">Anteprima codice</button>
           </div>
           <pre id="srcPreview" class="src-preview" hidden></pre>
         </section>
@@ -73,33 +76,33 @@
       <section class="viewport-wrap">
         <div id="viewport" class="viewport"></div>
         <div id="empty" class="empty">
-          <p>Carica il pezzo da stampare.</p>
-          <p class="muted">Tutto il calcolo avviene nel browser: il file non viene inviato a nessun server.</p>
+          <p data-i18n="empty.title">Carica il pezzo da stampare.</p>
+          <p class="muted" data-i18n="empty.sub">Tutto il calcolo avviene nel browser: il file non viene inviato a nessun server.</p>
         </div>
         <div class="vp-tools" id="vpTools" hidden>
           <div class="sim">
-            <button id="playBtn" class="primary small" title="Avvia / ferma la simulazione">▶ Simula</button>
-            <select id="simSpeed" title="Velocità della simulazione rispetto al robot reale">
+            <button id="playBtn" class="primary small" title="Avvia / ferma la simulazione" data-i18n-title="sim.play.title">▶ Simula</button>
+            <select id="simSpeed" title="Velocità della simulazione rispetto al robot reale" data-i18n-title="sim.speed.title">
               <option value="1">1×</option>
               <option value="5">5×</option>
               <option value="20" selected>20×</option>
               <option value="100">100×</option>
               <option value="500">500×</option>
             </select>
-            <input type="range" id="simSlider" min="0" max="0" value="0" aria-label="Movimento LIN" />
+            <input type="range" id="simSlider" min="0" max="0" value="0" aria-label="Movimento LIN" data-i18n-aria="sim.slider" />
           </div>
           <div id="simReadout" class="sim-readout">–</div>
-          <label>Strato <output id="layerOut">–</output>
+          <label><span data-i18n="vp.layer">Strato</span> <output id="layerOut">–</output>
             <input type="range" id="layerSlider" min="0" max="0" value="0" />
           </label>
-          <label>Modello
+          <label><span data-i18n="vp.model">Modello</span>
             <input type="range" id="opacity" min="0" max="1" step="0.05" value="0.25" />
           </label>
-          <button class="ghost small" id="placeBtn" title="Clicca poi sul piano">Posiziona pezzo</button>
-          <button class="ghost small" id="startBtn" title="Clicca poi vicino al contorno">Punto iniziale</button>
-          <button class="ghost small" id="fitBtn">Inquadra</button>
+          <button class="ghost small" id="placeBtn" title="Clicca poi sul piano" data-i18n="vp.place" data-i18n-title="vp.place.title">Posiziona pezzo</button>
+          <button class="ghost small" id="startBtn" title="Clicca poi vicino al contorno" data-i18n="vp.start" data-i18n-title="vp.start.title">Punto iniziale</button>
+          <button class="ghost small" id="fitBtn" data-i18n="vp.fit">Inquadra</button>
           <span id="pickHint" class="pick-hint" hidden></span>
-          <div class="legend"><span class="sw grad"></span>stampa (basso → alto) <span class="sw travel"></span>spostamento senza estrusione</div>
+          <div class="legend"><span class="sw grad"></span><span data-i18n="vp.legend.print">stampa (basso → alto)</span> <span class="sw travel"></span><span data-i18n="vp.legend.travel">spostamento senza estrusione</span></div>
         </div>
       </section>
     </main>

@@ -9,6 +9,10 @@ Sito web che sostituisce la catena Rhino/Grasshopper per la **stampa 3D robotica
 
 Tutto gira nel browser (TypeScript + Three.js + WebAssembly): il modello non viene caricato su nessun server.
 
+Il sito è in **italiano e inglese**: il pulsante EN / IT in alto a destra cambia la lingua di tutta la pagina (anche avvisi, note e orientamenti già calcolati) e la scelta resta salvata nel browser.
+
+**Sicurezza:** se il percorso contiene punti che il robot non raggiunge o assi oltre i limiti del KR16, lo scaricamento del `.src` viene bloccato finché posizione o orientamento non vengono corretti. Il controllo riguarda le pose del robot sui punti del percorso, non le collisioni del braccio o del mandrino con la cella.
+
 ## Cella fissa
 
 All'apertura il sito mostra già la cella, che non si sposta e non si può eliminare:
@@ -111,4 +115,5 @@ src/core/robot.ts        frame KUKA, cinematica diretta/inversa KR16
 scripts/build-cell.mjs   estrae robot, tavole e mandrino da BASE ROBOT.3dm
 public/cell.*            cella fissa
 src/main.ts              interfaccia
+src/i18n.ts              traduzioni IT / EN
 ```
