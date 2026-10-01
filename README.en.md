@@ -5,15 +5,21 @@
 Website that replaces the Rhino/Grasshopper chain for **robotic extrusion 3D printing with KUKA**:
 
 1. you load a **mesh or BREP** model,
-2. the site picks the best **orientation** and **print mode**,
-3. it computes the **toolpath that follows the exact contour** of the part, layer by layer,
+2. the site proposes the best **orientation**; you choose the **print mode** (default: contour layers),
+3. it computes the **toolpath that follows the contour** of the part within the set tolerance (default 0.2 mm), layer by layer,
 4. it exports the **KUKA `.src`** file with the same structure as `Tavolino1.src` (INI, BASE/TOOL, extruder I/O, `LIN … C_DIS`, shutdown, homing).
 
 Everything runs in the browser (TypeScript + Three.js + WebAssembly): the model is never uploaded to a server.
 
 The site is in **Italian and English**: the EN / IT button at the top right switches the whole page (warnings, notes and orientations already computed included) and the choice is saved in the browser.
 
-**Safety:** if the toolpath contains points the robot cannot reach or axes beyond the KR16 limits, downloading the `.src` is blocked until the position or orientation is fixed. The check covers the robot poses on the toolpath points, not collisions of the arm or spindle with the cell.
+**Checks before export.** The *Download .src* button stays disabled:
+- while a computation is running or after any change, until the latest computation has finished (an outdated result can never be downloaded);
+- if a parameter is outside its admitted values (TOOL/BASE numbers, $VEL.CP, ANOUT outputs, safe position and homing pose within the axis limits, …);
+- if the robot cannot reach a toolpath point or an intermediate point of a LIN (sampled every 20 mm), or an axis exceeds the KR16 limits;
+- if the toolpath leaves the work table, unless explicitly confirmed.
+
+**Limits.** The site does not check collisions of the arm or spindle with the table and the part, nor the PTP motion to the safe positions. With `C_DIS` (default, like Tavolino1) the controller blends the LIN moves and does not pass exactly through every point; the option *LIN approximation → None* makes the robot stop on every point. Before printing, the `.src` must still be run dry or in the simulation of the real cell.
 
 ## Fixed cell
 
@@ -38,7 +44,7 @@ The robot stands in the Rhino world at (0, −1000, 0): the point drawn in `BASE
 ## Quick start
 
 1. **Load the part**: a mesh or a BREP; a new file replaces the previous one. From a `.3dm` with the whole scene only the object standing on the work table is used.
-2. The site picks the orientation and the print mode.
+2. The site proposes the best orientation (Orientation section); choose the print mode in *Printing*.
 3. **Place part**: click on the plate in the view to move the centre of the part; the rotation on the table is in *KUKA robot and table → Part rotation Z*.
 4. **Start point**: click near the contour where printing should start (light blue dot).
 5. **Download .src**.
@@ -50,6 +56,8 @@ The robot stands in the Rhino world at (0, −1000, 0): the point drawn in `BASE
 | STL, OBJ, PLY | Three.js loaders (units assumed mm) |
 | 3DM (Rhino) | rhino3dm: meshes, polysurfaces and extrusions (using the render meshes saved in the file), SubD. Units converted to mm |
 | STEP, IGES, BREP | OpenCascade (occt-import-js), 0.1 mm tessellation |
+
+The rhino3dm and OpenCascade libraries are served by the site itself (`public/vendor`, copied from `node_modules` at every build): importing needs no CDN and no network.
 
 > `.3dm` polysurfaces without render meshes (files saved with "Save Small") cannot be read: open the file in Rhino in shaded view and save it again, or export STEP.
 
@@ -68,7 +76,7 @@ The robot stands in the Rhino world at (0, −1000, 0): the point drawn in `BASE
 | Contour layers | the contour of every layer at constant Z, +layer height at each layer (like Tavolino1) |
 | Contour spiral | as above but Z rises along the turn (vase mode), no seam |
 | Solid serpentine | the solid part with a continuous serpentine (pass after pass, like a lawn mower), optional outer contour. Whole planar layers up to below the lowest point of the top surface; then, with *blended layers*, N non-planar layers that go from flat to the shape of the surface (layer k at cut height + (surface − cut)·k/N): each covers the whole section, only its thickness changes (≈ ½–1½ layer heights), the last one is the real surface. No islands form and the extruder never stops (saddle: 13 planar + 17 blended, 0 stops). Automatic pass direction (0/45/90/135°, fewest breaks) |
-| Top surface serpentine | non-planar: the serpentine follows the top surface of the part (faces steeper than *max slope* are sides and are excluded), half a bead from the border; several stacked layers with *n° of layers*. With *tilt tool* the C parameter follows the normal (C = 180° − arccos(Nz), as in the A −180 / B 0 calibration), otherwise the tool stays vertical |
+| Top surface serpentine | non-planar: the serpentine follows the top surface of the part (faces steeper than *max slope* are sides and are excluded), half a bead from the border; several stacked layers with *n° of layers*. With *tilt tool* the C parameter follows the slope in the Y-Z plane (C = 180° − arccos(Nz) for slopes along Y, as in the A −180 / B 0 calibration); a slope along X cannot be expressed with C alone and is reported. Without the option the tool stays vertical. The result shows the *coverage* of the top surface |
 
 ## Position on the robot
 

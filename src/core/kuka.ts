@@ -55,6 +55,7 @@ export function writeKukaSrc(tp: Toolpath, r: RobotSettings, _info?: SrcInfo): s
   if (!tp.points.length) throw new MsgError(msg('e.emptyPath'));
   const name = sanitizeProgramName(r.programName);
   const pts = tp.points;
+  const approx = r.linApprox === 'none' ? '' : ' C_DIS';
   const safe = axes(r.safeAxes, true);
   const L: string[] = [];
   const h = (lines: string) => L.push(...lines.split('\n'));
@@ -136,7 +137,7 @@ PTP ${frame(pts[0], r)}
 ; PRIMO PUNTO REALE
 ; ANCORA SENZA ESTRUSIONE
 ; =========================
-LIN ${frame(pts[0], r)} C_DIS
+LIN ${frame(pts[0], r)}${approx}
 `);
 
   L.push(...extruderOn(r, 'ACCENSIONE ESTRUSORE'), '', '; =========================', '; INIZIO STAMPA', '; =========================');
@@ -152,7 +153,7 @@ LIN ${frame(pts[0], r)} C_DIS
       L.push(...extruderOn(r, 'RIACCENSIONE ESTRUSORE'));
       extruding = true;
     }
-    L.push(`LIN ${frame(p, r)} C_DIS`);
+    L.push(`LIN ${frame(p, r)}${approx}`);
   }
 
   h(`$VEL.CP=${r.velCP.toFixed(2)}

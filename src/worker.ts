@@ -30,7 +30,7 @@ self.onmessage = (ev: MessageEvent<WorkerRequest>) => {
       });
       const meta = { ...r.toolpath, points: [] };
       self.postMessage(
-        { type: 'build', id: req.id, xyz, ext, cc, meta, src: r.src, offset: r.offset, mesh: r.mesh, min: r.min, max: r.max, reach: r.reach },
+        { type: 'build', id: req.id, xyz, ext, cc, meta, src: r.src, offset: r.offset, mesh: r.mesh, min: r.min, max: r.max, reach: r.reach, errors: r.errors, offBed: r.offBed },
         { transfer: [xyz.buffer, ext.buffer, cc.buffer] },
       );
     }

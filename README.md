@@ -5,15 +5,21 @@
 Sito web che sostituisce la catena Rhino/Grasshopper per la **stampa 3D robotica a estrusione con KUKA**:
 
 1. carichi un modello **mesh o BREP**,
-2. il sito sceglie **orientamento** e **modo di stampa** migliori,
-3. calcola il **percorso che segue esattamente il contorno** del pezzo, strato per strato,
+2. il sito propone l'**orientamento** migliore; il **modo di stampa** lo scegli tu (default: contorno a strati),
+3. calcola il **percorso che segue il contorno** del pezzo entro la tolleranza impostata (default 0,2 mm), strato per strato,
 4. esporta il file **`.src` KUKA** con la stessa struttura di `Tavolino1.src` (INI, BASE/TOOL, I/O estrusore, `LIN … C_DIS`, spegnimento, homing).
 
 Tutto gira nel browser (TypeScript + Three.js + WebAssembly): il modello non viene caricato su nessun server.
 
 Il sito è in **italiano e inglese**: il pulsante EN / IT in alto a destra cambia la lingua di tutta la pagina (anche avvisi, note e orientamenti già calcolati) e la scelta resta salvata nel browser.
 
-**Sicurezza:** se il percorso contiene punti che il robot non raggiunge o assi oltre i limiti del KR16, lo scaricamento del `.src` viene bloccato finché posizione o orientamento non vengono corretti. Il controllo riguarda le pose del robot sui punti del percorso, non le collisioni del braccio o del mandrino con la cella.
+**Controlli prima dell'esportazione.** Il pulsante *Scarica .src* resta disattivato:
+- mentre un calcolo è in corso o dopo qualsiasi modifica, finché l'ultimo calcolo non è finito (un risultato vecchio non è mai scaricabile);
+- se un parametro è fuori dai valori ammessi (numeri di TOOL/BASE, $VEL.CP, uscite ANOUT, posizione sicura e posa di homing entro i limiti degli assi, …);
+- se il robot non raggiunge un punto del percorso o un punto intermedio dei LIN (campionati ogni 20 mm), o se un asse supera i limiti del KR16;
+- se il percorso esce dal piano di lavoro, a meno di una conferma esplicita.
+
+**Limiti.** Il sito non verifica le collisioni del braccio o del mandrino con tavola e pezzo, né il moto PTP verso le posizioni di sicurezza. Con `C_DIS` (default, come Tavolino1) il controller raccorda i LIN e non passa esattamente per ogni punto; l'opzione *Approssimazione LIN → Nessuna* fa fermare il robot su ogni punto. Prima della stampa il `.src` va comunque provato a vuoto o nella simulazione della cella reale.
 
 ## Cella fissa
 
@@ -38,7 +44,7 @@ Il robot sta nel mondo Rhino a (0, −1000, 0): il punto disegnato in `BASE ROBO
 ## Uso rapido
 
 1. **Carica il pezzo**: una mesh o un BREP; un nuovo file sostituisce il precedente. Da un `.3dm` con tutta la scena viene preso solo l'oggetto che sta sul piano di lavoro.
-2. Il sito sceglie orientamento e modo di stampa.
+2. Il sito propone l'orientamento migliore (sezione Orientamento); scegli il modo di stampa in *Stampa*.
 3. **Posiziona pezzo**: clicca sulla lastra nell'anteprima per spostare il centro del pezzo; la rotazione sul piano è in *Robot KUKA e piano → Rotazione pezzo Z*.
 4. **Punto iniziale**: clicca vicino al contorno dove vuoi che parta la stampa (punto azzurro).
 5. **Scarica .src**.
@@ -50,6 +56,8 @@ Il robot sta nel mondo Rhino a (0, −1000, 0): il punto disegnato in `BASE ROBO
 | STL, OBJ, PLY | loader Three.js (unità assunte in mm) |
 | 3DM (Rhino) | rhino3dm: mesh, polisuperfici ed estrusioni (usa le mesh di render salvate nel file), SubD. Unità convertite in mm |
 | STEP, IGES, BREP | OpenCascade (occt-import-js), tassellazione 0,1 mm |
+
+Le librerie rhino3dm e OpenCascade sono servite dal sito stesso (`public/vendor`, copiate da `node_modules` a ogni build): l'importazione non usa CDN né rete.
 
 > Polisuperfici `.3dm` senza mesh di render (file salvati con "Salva piccolo") non sono leggibili: apri il file in Rhino in vista ombreggiata e risalva, oppure esporta STEP.
 
@@ -68,7 +76,7 @@ Il robot sta nel mondo Rhino a (0, −1000, 0): il punto disegnato in `BASE ROBO
 | Contorno a strati | il contorno di ogni strato a Z costante, +altezza strato a ogni strato (come Tavolino1) |
 | Contorno a spirale | come sopra ma la Z sale lungo il giro (vase mode), senza giunzione |
 | Pieno a serpentina | il pezzo pieno con una serpentina continua (passata dopo passata, come un tosaerba), contorno esterno opzionale. Strati planari interi fino sotto il punto più basso della superficie superiore; poi, con *strati graduali*, N strati non planari che passano dal piano alla forma della superficie (strato k a quota taglio + (superficie − taglio)·k/N): ognuno copre tutta la sezione, cambia solo lo spessore (≈ ½–1½ altezza strato), l'ultimo è la superficie vera. Così non si formano isole e l'estrusore non si ferma (sella: 13 planari + 17 graduali, 0 stop). Direzione delle passate automatica (0/45/90/135°, meno interruzioni) |
-| Superficie superiore a serpentina | non planare: la serpentina segue la superficie superiore del pezzo (le facce più ripide di *pendenza max* sono fianchi e vengono escluse), mezzo cordolo dal bordo; più strati sovrapposti con *n° di strati*. Con *inclina utensile* il parametro C segue la normale (C = 180° − arccos(Nz), come nella calibrazione A −180 / B 0), altrimenti l'utensile resta verticale |
+| Superficie superiore a serpentina | non planare: la serpentina segue la superficie superiore del pezzo (le facce più ripide di *pendenza max* sono fianchi e vengono escluse), mezzo cordolo dal bordo; più strati sovrapposti con *n° di strati*. Con *inclina utensile* il parametro C segue la pendenza nel piano Y-Z (C = 180° − arccos(Nz) per pendenze lungo Y, come nella calibrazione A −180 / B 0); la pendenza lungo X non è rappresentabile con il solo C e viene segnalata. Senza l'opzione l'utensile resta verticale. Il risultato indica la *copertura* della superficie superiore |
 
 ## Posizione sul robot
 

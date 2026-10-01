@@ -147,6 +147,8 @@ function setNotes(notes: Msg[], error?: Msg | string) {
 }
 
 async function openFile(file: File) {
+  invalidate();
+  offBedOk.checked = false;
   const cell: CellRegion = {
     worldBase: [robot.worldBaseX, robot.worldBaseY, robot.worldBaseZ],
     bedCenter: [robot.bedCenterX, robot.bedCenterY],
@@ -207,6 +209,7 @@ function showModelInfo(m: MeshData) {
 // ---------- step 2: orientation ----------
 
 async function analyze() {
+  invalidate();
   if (!mesh) return;
   const m = mesh;
   try {
@@ -340,6 +343,16 @@ const ROBOT_FIELDS: Field[] = [
   { key: 'extruderSpeed', label: 'f.extruderSpeed', kind: 'number', step: 0.1 },
   { key: 'extruderDelay', label: 'f.extruderDelay', kind: 'number', step: 0.5 },
   { key: 'useHoming', label: 'f.useHoming', kind: 'check', full: true },
+  {
+    key: 'linApprox',
+    label: 'f.linApprox',
+    kind: 'select',
+    full: true,
+    options: [
+      ['C_DIS', 'approx.cdis'],
+      ['none', 'approx.none'],
+    ],
+  },
   { group: 'g.placement' },
   {
     key: 'placement',
@@ -417,8 +430,21 @@ function renderFields(host: HTMLElement, fields: Field[], target: Record<string,
   );
 }
 
+/**
+ * Every change (model, orientation, parameters) makes the current .src obsolete at once: the
+ * download stays disabled until the latest computation has finished and passed every check.
+ * `buildSeq` numbers the computations so a late result of an older one is ignored.
+ */
+let buildSeq = 0;
+function invalidate() {
+  buildSeq++;
+  lastSrc = '';
+  updateExport();
+}
+
 let buildTimer = 0;
 const buildSoon = () => {
+  invalidate();
   clearTimeout(buildTimer);
   buildTimer = window.setTimeout(build, 400);
 };
@@ -462,6 +488,8 @@ interface BuildMsg {
   min: [number, number, number];
   max: [number, number, number];
   reach: ReachReport;
+  errors: Msg[];
+  offBed: boolean;
 }
 
 let currentMeta: Toolpath | null = null;
@@ -470,7 +498,9 @@ let lastBuild: BuildMsg | null = null;
 let fitNext = true;
 
 async function build(): Promise<BuildMsg | null> {
+  invalidate();
   if (!mesh || !orientations.length) return null;
+  const seq = buildSeq;
   const matrix = mulMat3(manual, orientations[orientIdx].matrix);
   const m = mesh;
   let r: BuildMsg;
@@ -479,10 +509,10 @@ async function build(): Promise<BuildMsg | null> {
       run<BuildMsg>('build', { type: 'build', mesh: m, matrix, print: { ...print }, robot: structuredClone(robot), sourceName }),
     );
   } catch (e) {
-    if (!(e instanceof Superseded)) $('warnings').replaceChildren(li(tm(errText(e))));
+    if (!(e instanceof Superseded) && seq === buildSeq) $('warnings').replaceChildren(li(tm(errText(e))));
     return null;
   }
-  if (m !== mesh) return null;
+  if (m !== mesh || seq !== buildSeq) return null;
   lastSrc = r.src;
   currentMeta = r.meta;
   lastBuild = r;
@@ -676,6 +706,9 @@ function renderStats(r: BuildMsg) {
       true,
     ],
     [t('r.file'), kb > 1024 ? `${(kb / 1024).toFixed(1)} MB` : `${kb.toFixed(0)} KB`],
+    ...(tp.coverage !== undefined
+      ? ([[t('r.coverage'), t('r.coverage.v', { p: Math.round(tp.coverage * 100), a: Math.round((tp.topArea ?? 0) / 100) })]] as [string, string][])
+      : []),
     [t('r.material'), `${((tp.printLength * print.layerHeight * print.wallSpacing) / 1e6).toFixed(2)} L`],
   ];
   $('stats').replaceChildren(
@@ -688,17 +721,34 @@ function renderStats(r: BuildMsg) {
       return d;
     }),
   );
-  // A path the robot cannot follow must not reach the controller: block the export.
-  const blocked = r.reach.unreachable > 0 || r.reach.outOfLimits > 0;
-  $<HTMLButtonElement>('download').disabled = blocked;
-  $('warnings').replaceChildren(
-    ...(blocked ? [li(t('out.blocked'), 'blocked')] : []),
-    ...tp.warnings.map((w) => li(tm(w))),
-  );
+  $('warnings').replaceChildren(...r.errors.map((w) => li(tm(w), 'blocked')), ...tp.warnings.map((w) => li(tm(w))));
+  updateExport();
 }
 
+/** Why the current result may not be exported (empty = export allowed). */
+function exportBlocks(): string[] {
+  const r = lastBuild;
+  if (!r || !lastSrc) return [];
+  const out: string[] = [];
+  if (r.errors.length) out.push(t('out.blockedParams'));
+  // A path the robot cannot follow must not reach the controller.
+  if (r.reach.unreachable > 0 || r.reach.outOfLimits > 0) out.push(t('out.blocked'));
+  if (r.offBed && !offBedOk.checked) out.push(t('out.blockedOffBed'));
+  return out;
+}
+
+function updateExport() {
+  const ready = !!lastSrc && !!lastBuild;
+  const blocks = exportBlocks();
+  $<HTMLButtonElement>('download').disabled = !ready || blocks.length > 0;
+  $('offBedRow').hidden = !(ready && lastBuild!.offBed);
+  $('exportState').replaceChildren(...(ready ? blocks.map((b) => li(b, 'blocked')) : mesh ? [li(t('out.stale'))] : []));
+}
+
+const offBedOk = $<HTMLInputElement>('offBedOk');
+offBedOk.addEventListener('change', updateExport);
 $('download').onclick = () => {
-  if (!lastSrc || !lastBuild || lastBuild.reach.unreachable > 0 || lastBuild.reach.outOfLimits > 0) return;
+  if (!lastSrc || !lastBuild || exportBlocks().length) return;
   const a = document.createElement('a');
   a.href = URL.createObjectURL(new Blob([lastSrc], { type: 'text/plain' }));
   a.download = sanitizeProgramName(robot.programName) + '.src';
@@ -733,6 +783,7 @@ function applyLanguage() {
     updateLayerLabel();
   }
   $('playBtn').textContent = t(playing ? 'sim.pause' : 'sim.play');
+  updateExport();
   if (pick !== 'none') $('pickHint').textContent = pick === 'place' ? t('pick.place') : t('pick.start');
 }
 $('langToggle').onclick = () => {

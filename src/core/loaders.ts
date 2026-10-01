@@ -8,8 +8,8 @@ import { OBJLoader } from 'three/examples/jsm/loaders/OBJLoader.js';
 import { PLYLoader } from 'three/examples/jsm/loaders/PLYLoader.js';
 import { computeBounds, mergeMeshes, orientOutward, weld, type MeshData } from './mesh';
 
-export const RHINO3DM_URL = 'https://cdn.jsdelivr.net/npm/rhino3dm@8.35.0/rhino3dm.module.min.js';
-export const OCCT_URL = 'https://cdn.jsdelivr.net/npm/occt-import-js@0.0.23/dist/occt-import-js.js';
+// Served by the site itself (scripts/copy-vendor.mjs): no CDN, no network needed to import.
+const vendor = (file: string) => new URL(`vendor/${file}`, document.baseURI).href;
 
 export const ACCEPTED = '.stl,.obj,.ply,.3dm,.step,.stp,.iges,.igs,.brep';
 
@@ -62,7 +62,7 @@ type Any = any;
 
 let rhinoPromise: Promise<Any> | null = null;
 export function loadRhino(): Promise<Any> {
-  rhinoPromise ??= import(/* @vite-ignore */ RHINO3DM_URL).then((m) => m.default());
+  rhinoPromise ??= import(/* @vite-ignore */ vendor('rhino3dm.module.min.js')).then((m) => m.default());
   return rhinoPromise;
 }
 
@@ -169,9 +169,9 @@ let occtPromise: Promise<Any> | null = null;
 function loadOcct(): Promise<Any> {
   occtPromise ??= new Promise((resolve, reject) => {
     const s = document.createElement('script');
-    s.src = OCCT_URL;
+    s.src = vendor('occt-import-js.js');
     s.onload = () =>
-      (window as Any).occtimportjs({ locateFile: (f: string) => OCCT_URL.replace(/[^/]+$/, f) }).then(resolve, reject);
+      (window as Any).occtimportjs({ locateFile: (f: string) => vendor(f) }).then(resolve, reject);
     s.onerror = () => reject(new MsgError(msg('e.occtLoad')));
     document.head.appendChild(s);
   });

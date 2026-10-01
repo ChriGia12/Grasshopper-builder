@@ -52,6 +52,8 @@ export interface RobotSettings {
   extruderSpeed: number; // 10 = 100%
   extruderDelay: number; // s
   useHoming: boolean;
+  /** LIN approximation: C_DIS (like Tavolino1, smooth but corners are rounded) or exact stop on every point. */
+  linApprox: 'C_DIS' | 'none';
   /**
    * 'file': keep the position the part has in the Rhino file (world) and convert to BASE by
    * subtracting worldBase — same as CODICE PYTHON.txt. 'origin': put the part's bbox
@@ -122,6 +124,7 @@ export const DEFAULT_ROBOT: RobotSettings = {
   extruderSpeed: 2,
   extruderDelay: 1,
   useHoming: true,
+  linApprox: 'C_DIS',
   placement: 'origin',
   worldBaseX: 1448,
   worldBaseY: -1000,

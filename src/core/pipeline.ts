@@ -1,5 +1,6 @@
 // End-to-end build used by the worker: orient → slice → toolpath → KUKA .src.
-import { msg } from '../i18n';
+import { msg, type Msg } from '../i18n';
+import { validateSettings } from './validate';
 import { writeKukaSrc } from './kuka';
 import { applyMatrix, computeBounds, dropToOrigin, mulMat3, rotZ, type Mat3, type MeshData } from './mesh';
 import type { PrintSettings, RobotSettings } from './settings';
@@ -17,6 +18,10 @@ export interface BuildResult {
   min: [number, number, number];
   max: [number, number, number];
   reach: ReachReport;
+  /** Parameter errors (validateSettings): they block the export. */
+  errors: Msg[];
+  /** The path leaves the work table: export needs an explicit confirmation. */
+  offBed: boolean;
 }
 
 /** Where the local part frame lands in BASE coordinates. */
@@ -55,10 +60,11 @@ export function runBuild(
       max[k] = Math.max(max[k], v[k]);
     }
   }
+  const errors = validateSettings(print, robot);
   const bx0 = robot.bedCenterX - robot.bedSizeX / 2;
   const by0 = robot.bedCenterY - robot.bedSizeY / 2;
-  if (min[0] < bx0 || min[1] < by0 || max[0] > bx0 + robot.bedSizeX || max[1] > by0 + robot.bedSizeY)
-    toolpath.warnings.push(msg('w.offBed', { sx: robot.bedSizeX, sy: robot.bedSizeY, cx: robot.bedCenterX, cy: robot.bedCenterY }));
+  const offBed = min[0] < bx0 || min[1] < by0 || max[0] > bx0 + robot.bedSizeX || max[1] > by0 + robot.bedSizeY;
+  if (offBed) toolpath.warnings.push(msg('w.offBed', { sx: robot.bedSizeX, sy: robot.bedSizeY, cx: robot.bedCenterX, cy: robot.bedCenterY }));
   if (min[2] < 0) toolpath.warnings.push(msg('w.negativeZ'));
 
   const basePts = new Float64Array(toolpath.points.length * 3);
@@ -68,5 +74,7 @@ export function runBuild(
   if (reach.unreachable)
     toolpath.warnings.push(msg('w.unreachable', { n: reach.unreachable }));
   if (reach.outOfLimits) toolpath.warnings.push(msg('w.limits', { n: reach.outOfLimits }));
-  return { toolpath, src, offset, mesh, min, max, reach };
+  if (reach.jumps) toolpath.warnings.push(msg('w.jumps', { n: reach.jumps }));
+  if (toolpath.tiltX) toolpath.warnings.push(msg('w.tiltX', { n: toolpath.tiltX }));
+  return { toolpath, src, offset, mesh, min, max, reach, errors, offBed };
 }

@@ -6,18 +6,20 @@
     "build": "tsc && vite build",
     "preview": "vite preview",
     "test": "vitest run",
-    "typecheck": "tsc"
+    "typecheck": "tsc",
+    "predev": "node scripts/copy-vendor.mjs",
+    "prebuild": "node scripts/copy-vendor.mjs"
   },
   "description": "Web app: mesh/BREP -> contour toolpath -> KUKA .src for robotic 3D printing",
   "dependencies": {
     "clipper-lib": "^6.4.2",
-    "three": "^0.186.1"
+    "three": "^0.186.1",
+    "rhino3dm": "^8.35.0",
+    "occt-import-js": "^0.0.23"
   },
   "devDependencies": {
     "@types/node": "^26.6.3",
     "@types/three": "^0.186.0",
-    "occt-import-js": "^0.0.23",
-    "rhino3dm": "^8.35.0",
     "typescript": "^7.0.2",
     "vite": "^8.3.1",
     "vitest": "^4.1.11"

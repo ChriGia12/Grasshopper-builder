@@ -189,32 +189,55 @@ export function flangeTarget(p: V3, r: RobotSettings): { R: M3; p: V3 } {
 export const withinLimits = (q: Joints) => q.every((v, i) => v >= KR16.limits[i][0] - 1e-6 && v <= KR16.limits[i][1] + 1e-6);
 
 export interface ReachReport {
-  unreachable: number; // points the arm cannot reach with the tool orientation
+  unreachable: number; // poses the arm cannot reach (path points and intermediate LIN samples)
   outOfLimits: number; // reachable, but some axis beyond its limits
+  jumps: number; // consecutive poses whose axes jump > 45°: possible wrist flip / reconfiguration
   jointMin: number[];
   jointMax: number[];
   first: Joints | null; // pose at the first point, for the viewer
 }
 
-/** Solve the arm pose for every path point (BASE coordinates, flat xyz array). */
-export function reachReport(pointsBase: ArrayLike<number>, r: RobotSettings, cs?: ArrayLike<number>): ReachReport {
-  const rep: ReachReport = { unreachable: 0, outOfLimits: 0, jointMin: Array(6).fill(Infinity), jointMax: Array(6).fill(-Infinity), first: null };
+/**
+ * Solve the arm pose along the whole path (BASE coordinates, flat xyz array): every point and,
+ * on long LIN moves, intermediate samples every `segStep` mm, since the controller moves the
+ * TCP on the straight line between points.
+ */
+export function reachReport(pointsBase: ArrayLike<number>, r: RobotSettings, cs?: ArrayLike<number>, segStep = 20): ReachReport {
+  const rep: ReachReport = { unreachable: 0, outOfLimits: 0, jumps: 0, jointMin: Array(6).fill(Infinity), jointMax: Array(6).fill(-Infinity), first: null };
   let prev: Joints | undefined;
-  for (let i = 0; i < pointsBase.length; i += 3) {
-    const c = cs?.[i / 3];
-    const t = flangeTarget([pointsBase[i], pointsBase[i + 1], pointsBase[i + 2]], c !== undefined && Number.isFinite(c) ? { ...r, c } : r);
+  const n = pointsBase.length / 3;
+  const solve = (p: V3, c: number | undefined, counted: boolean) => {
+    const t = flangeTarget(p, c !== undefined && Number.isFinite(c) ? { ...r, c } : r);
     const q = inverseKinematics(t.R, t.p, prev);
     if (!q) {
       rep.unreachable++;
-      continue;
+      return;
     }
-    if (!rep.first) rep.first = q;
+    if (prev && q.some((v, k) => Math.abs(v - prev![k]) > 45)) rep.jumps++;
     if (!withinLimits(q)) rep.outOfLimits++;
-    q.forEach((v, k) => {
-      rep.jointMin[k] = Math.min(rep.jointMin[k], v);
-      rep.jointMax[k] = Math.max(rep.jointMax[k], v);
-    });
+    if (counted) {
+      if (!rep.first) rep.first = q;
+      q.forEach((v, k) => {
+        rep.jointMin[k] = Math.min(rep.jointMin[k], v);
+        rep.jointMax[k] = Math.max(rep.jointMax[k], v);
+      });
+    }
     prev = q;
+  };
+  for (let i = 0; i < n; i++) {
+    const p: V3 = [pointsBase[i * 3], pointsBase[i * 3 + 1], pointsBase[i * 3 + 2]];
+    if (i > 0) {
+      const a: V3 = [pointsBase[i * 3 - 3], pointsBase[i * 3 - 2], pointsBase[i * 3 - 1]];
+      const steps = Math.ceil(Math.hypot(p[0] - a[0], p[1] - a[1], p[2] - a[2]) / segStep);
+      const c0 = cs?.[i - 1];
+      const c1 = cs?.[i];
+      for (let k = 1; k < steps; k++) {
+        const f = k / steps;
+        const c = c0 !== undefined && c1 !== undefined && Number.isFinite(c0) && Number.isFinite(c1) ? c0 + (c1 - c0) * f : undefined;
+        solve([a[0] + (p[0] - a[0]) * f, a[1] + (p[1] - a[1]) * f, a[2] + (p[2] - a[2]) * f], c, false);
+      }
+    }
+    solve(p, cs?.[i], true);
   }
   return rep;
 }

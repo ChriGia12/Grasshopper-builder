@@ -32,6 +32,11 @@ export interface Toolpath {
   warnings: Msg[];
   /** Solid serpentine: layers from this index on are blended (non-planar). */
   planarLayers?: number;
+  /** Surface mode: share of the top surface covered by the passes (0…1), and that surface's plan area (mm²). */
+  coverage?: number;
+  topArea?: number;
+  /** Tilt on: points whose slope along X cannot be followed with C (> 5°). */
+  tiltX?: number;
 }
 
 export interface LayerSummary {
@@ -298,7 +303,11 @@ function printSurfaceRuns(tp: Toolpath, runs: SurfaceRun[], dz: number, s: Print
   };
   for (const [run, flip, link] of serpentine(runs, cur, end)) {
     const pts = flip ? [...run.pts].reverse() : run.pts;
-    const cOf = (q: SurfacePoint) => (s.surfaceTilt ? cFromNormal(q.n) : undefined);
+    const cOf = (q: SurfacePoint) => {
+      if (!s.surfaceTilt) return undefined;
+      countTiltX(tp, q.n);
+      return cFromNormal(q.n);
+    };
     moveTo(tp, [pts[0].x, pts[0].y], pts[0].z + dz, s, cOf(pts[0]), link);
     for (const q of pts.slice(1)) push(tp, { x: q.x, y: q.y, z: q.z + dz, e: true, c: cOf(q) });
     cur = [pts[pts.length - 1].x, pts[pts.length - 1].y];
@@ -457,7 +466,9 @@ function buildZigzag(tp: Toolpath, mesh: MeshData, layers: Layer[], s: PrintSett
         // Normal of the blended layer: the top surface slope scaled by f.
         const g = [(-t.n[0] / t.n[2]) * f, (-t.n[1] / t.n[2]) * f];
         const len = Math.hypot(g[0], g[1], 1);
-        const c = s.surfaceTilt ? cFromNormal([-g[0] / len, -g[1] / len, 1 / len]) : undefined;
+        const nrm: [number, number, number] = [-g[0] / len, -g[1] / len, 1 / len];
+        if (s.surfaceTilt) countTiltX(tp, nrm);
+        const c = s.surfaceTilt ? cFromNormal(nrm) : undefined;
         return { z: beadTop - thick * squash, c };
       };
       printLayer(lastRegion, layers.length + k, zAt, step);
@@ -492,6 +503,37 @@ function buildSurface(mesh: MeshData, s: PrintSettings, start: Vec2): Toolpath {
       break;
     }
     cur = printSurfaceRuns(tp, runs, s.firstLayerZ + k * s.layerHeight, s, cur);
+    if (k === 0) [tp.coverage, tp.topArea] = surfaceCoverage(mesh, runs, s);
   }
+  if (tp.coverage !== undefined && tp.coverage < 0.8) tp.warnings.push(msg('w.coverage', { p: Math.round(tp.coverage * 100) }));
   return tp;
+}
+
+/** Slope along X that C cannot express (with A −180 / B 0, C tilts only in the Y-Z plane). */
+const TILT_X_LIMIT = Math.tan((5 * Math.PI) / 180);
+export function countTiltX(tp: Toolpath, n: [number, number, number]) {
+  if (Math.abs(n[0]) / Math.max(1e-9, n[2]) > TILT_X_LIMIT) tp.tiltX = (tp.tiltX ?? 0) + 1;
+}
+
+/**
+ * Share of the top surface (faces flatter than the max slope, projected on the table) covered by
+ * the passes: each pass covers its plan length × one bead width.
+ */
+function surfaceCoverage(mesh: MeshData, runs: SurfaceRun[], s: PrintSettings): [number, number] {
+  const minNz = Math.cos((s.surfaceMaxSlope * Math.PI) / 180);
+  const p = mesh.positions;
+  const ix = mesh.indices;
+  let area = 0;
+  for (let t = 0; t < ix.length; t += 3) {
+    const a = ix[t] * 3, b = ix[t + 1] * 3, c = ix[t + 2] * 3;
+    const ux = p[b] - p[a], uy = p[b + 1] - p[a + 1], uz = p[b + 2] - p[a + 2];
+    const vx = p[c] - p[a], vy = p[c + 1] - p[a + 1], vz = p[c + 2] - p[a + 2];
+    const nz = ux * vy - uy * vx; // 2 × projected area, signed
+    const len = Math.hypot(uy * vz - uz * vy, uz * vx - ux * vz, nz);
+    if (len > 0 && nz / len >= minNz) area += nz / 2;
+  }
+  let covered = 0;
+  for (const r of runs)
+    for (let i = 1; i < r.pts.length; i++) covered += Math.hypot(r.pts[i].x - r.pts[i - 1].x, r.pts[i].y - r.pts[i - 1].y) * s.wallSpacing;
+  return [area > 0 ? Math.min(1, covered / area) : 0, area];
 }

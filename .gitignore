@@ -3,3 +3,4 @@ dist
 .claude-flow
 .DS_Store
 *.log
+public/vendor
