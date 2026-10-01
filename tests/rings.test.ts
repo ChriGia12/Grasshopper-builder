@@ -80,7 +80,8 @@ describe('rings on a dome', () => {
 
   it('on the steep flank the rings climb 1.5 mm, near the top they get closer in Z', () => {
     const tp = buildToolpath(d, { ...s, mode: 'planar' });
-    const z = tp.layerStart.map((i) => tp.points[i + 1].z);
+    // height of every ring where it closes (its start is on the ramp from the ring below)
+    const z = tp.layerStart.map((_, k) => tp.points[(tp.layerStart[k + 1] ?? tp.points.length) - 1].z);
     expect(z[2] - z[1]).toBeCloseTo(1.5, 0);
     expect(z[z.length - 1] - z[z.length - 2]).toBeLessThan(1);
   });

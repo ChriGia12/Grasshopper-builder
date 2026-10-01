@@ -13,8 +13,8 @@ import { msg } from '../i18n';
 import type { MeshData } from './mesh';
 import { computeBounds } from './mesh';
 import type { PrintSettings } from './settings';
-import type { PathPoint, Toolpath } from './toolpath';
-import type { Vec2 } from './polyline';
+import { rampPoints, type PathPoint, type Toolpath } from './toolpath';
+import { pointInPolygon, type Vec2 } from './polyline';
 
 type V3 = [number, number, number];
 
@@ -419,15 +419,31 @@ export function buildRings(input: MeshData, s: PrintSettings, start: Vec2, spira
     const pt: PathPoint = { x: q[0], y: q[1], z: q[2], e };
     tp.points.push(pt);
   };
+  /** Plan of the ring printed last: a step that stays inside it runs over printed material. */
+  let below: Vec2[] | null = null;
+  const overBelow = (q: V3) => {
+    const last = tp.points[tp.points.length - 1];
+    if (!below || !last) return false;
+    const n = Math.max(2, Math.ceil(Math.hypot(q[0] - last.x, q[1] - last.y) / 2));
+    for (let k = 1; k < n; k++) if (!pointInPolygon([last.x + ((q[0] - last.x) * k) / n, last.y + ((q[1] - last.y) * k) / n], below)) return false;
+    return true;
+  };
   /**
-   * Reach q from the last point. The step from a ring to the next one runs on the surface between
-   * them: printed up to three beads (one continuous bead); a longer jump is a lifted travel.
+   * Can the step from the last point to q be printed? From a ring to the next one: up to three
+   * beads on the surface between them, or longer when it stays over the ring just printed (at the
+   * top of a long ridge the last rings end at different spots); otherwise a lifted travel.
    */
+  const printable = (q: V3, nextRing: boolean) => {
+    const last = tp.points[tp.points.length - 1];
+    if (!last) return false;
+    const d = Math.hypot(q[0] - last.x, q[1] - last.y, q[2] - last.z);
+    return d <= (nextRing ? 3 : 1.5) * Math.max(s.wallSpacing, s.layerHeight) || (nextRing && overBelow(q));
+  };
+  /** Reach q from the last point: printed step when possible, lifted travel otherwise. */
   const reach = (q: V3, nextRing: boolean) => {
     const last = tp.points[tp.points.length - 1];
     if (!last) return add(q, false);
-    const d = Math.hypot(q[0] - last.x, q[1] - last.y, q[2] - last.z);
-    if (d <= (nextRing ? 3 : 1.5) * Math.max(s.wallSpacing, s.layerHeight)) return add(q, true);
+    if (printable(q, nextRing)) return add(q, true);
     tp.travels++;
     const zUp = Math.max(last.z, q[2]) + s.travelLift;
     add([last.x, last.y, zUp], false);
@@ -465,6 +481,14 @@ export function buildRings(input: MeshData, s: PrintSettings, start: Vec2, spira
     const d = Math.abs(Math.atan2(q[1] - topXY[1], q[0] - topXY[0]) - rayAngle) % (2 * Math.PI);
     return Math.min(d, 2 * Math.PI - d);
   };
+  /** Direction the nozzle is moving in (last printed segment), to never start a ring behind it. */
+  const heading = (): Vec2 | null => {
+    const n = tp.points.length;
+    if (n < 2) return null;
+    const [a, b] = [tp.points[n - 2], tp.points[n - 1]];
+    const l = Math.hypot(b.x - a.x, b.y - a.y);
+    return l > 1e-6 ? [(b.x - a.x) / l, (b.y - a.y) / l] : null;
+  };
   const seamed = (r: Ring, near: V3, nested: boolean): V3[] => {
     if (!r.closed || !nested) return rotateRing(r, near);
     // Continuity first: only points about as close as the nearest one (within one bead); among
@@ -475,6 +499,18 @@ export function buildRings(input: MeshData, s: PrintSettings, start: Vec2, spira
       if (dist(q, near) > dmin + s.wallSpacing) return;
       if (best < 0 || offRay(q) < offRay(r.pts[best])) best = k;
     });
+    // Rings run the same way round: step the start forward until it is not behind the nozzle.
+    const dir = heading();
+    if (dir) {
+      const n = r.pts.length;
+      for (let k = 0; k < n / 4; k++) {
+        const q = r.pts[best];
+        if ((q[0] - near[0]) * dir[0] + (q[1] - near[1]) * dir[1] >= 0) break;
+        const next = (best + 1) % n;
+        if (dist(r.pts[next], near) > dmin + s.wallSpacing) break; // keep the step short
+        best = next;
+      }
+    }
     return [...r.pts.slice(best), ...r.pts.slice(0, best)];
   };
 
@@ -511,9 +547,24 @@ export function buildRings(input: MeshData, s: PrintSettings, start: Vec2, spira
       });
       const r = pending.splice(bi, 1)[0];
       const pts = seamed(r, cur, rings.length === 1).map(at);
-      reach(pts[0], rings.length === 1);
-      for (const q of pts.slice(1)) add(q, true);
-      if (r.closed) add(pts[0], true);
+      const last = tp.points[tp.points.length - 1];
+      if (s.layerRamp > 0 && last?.e && r.closed && rings.length === 1 && pts[0][2] > last.z && printable(pts[0], true)) {
+        // Ring change as a ramp: the bead goes on along the new ring, climbing from the height
+        // where the last ring ended to the ring's own height over the first `layerRamp` mm.
+        const ring = [...pts, pts[0]];
+        const ramped = rampPoints(
+          ring.map((q) => [q[0], q[1]] as Vec2),
+          (i) => ring[i][2],
+          last.z,
+          s.layerRamp,
+        );
+        for (const q of ramped) add([q.x, q.y, q.z], true);
+      } else {
+        reach(pts[0], rings.length === 1);
+        for (const q of pts.slice(1)) add(q, true);
+        if (r.closed) add(pts[0], true);
+      }
+      if (r.closed) below = pts.map((q) => [q[0], q[1]] as Vec2);
       const end = tp.points[tp.points.length - 1];
       cur = [end.x, end.y, end.z];
     }

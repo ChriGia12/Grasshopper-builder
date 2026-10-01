@@ -9,6 +9,8 @@ export type PrintMode = 'planar' | 'spiral' | 'zigzag' | 'surface';
 
 export interface PrintSettings {
   layerHeight: number; // mm
+  /** mm: contour layers change layer climbing along this length while printing (0 = vertical step). */
+  layerRamp: number;
   /**
    * Contour layers / spiral: non-planar rings that follow the surface, every point one bead from
    * the previous ring (layerHeight in Z on steep walls, wallSpacing sideways on flat areas).
@@ -91,6 +93,7 @@ export interface RobotSettings {
 
 export const DEFAULT_PRINT: PrintSettings = {
   layerHeight: 1.5,
+  layerRamp: 20,
   adaptiveLayers: false,
   baseCut: 0,
   firstLayerZ: 0.5,

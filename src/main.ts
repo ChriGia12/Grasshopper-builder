@@ -625,6 +625,7 @@ const PRINT_FIELDS: Field[] = [
     ],
   },
   { key: 'layerHeight', label: 'f.layerHeight', kind: 'number', step: 0.1, min: 0.1 },
+  { key: 'layerRamp', label: 'f.layerRamp', kind: 'number', step: 5, min: 0 },
   { key: 'adaptiveLayers', label: 'f.adaptiveLayers', kind: 'check', full: true },
   { key: 'baseCut', label: 'f.baseCut', kind: 'number', step: 1, min: 0 },
   { key: 'walls', label: 'f.walls', kind: 'number', step: 1, min: 1 },

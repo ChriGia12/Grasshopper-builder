@@ -279,6 +279,30 @@ function nearestIndex(contours: Contour[], cur: Vec2): number {
   return bi;
 }
 
+/**
+ * Points of a loop climbing from `fromZ` to their own height over the first `length` mm (in plan)
+ * of the loop, then on at their height. `zOf` gives the height of point i. The point where the
+ * ramp ends is added exactly, so the climb is one straight diagonal.
+ */
+export function rampPoints(pts: Vec2[], zOf: (i: number) => number, fromZ: number, length: number): PathPoint[] {
+  const out: PathPoint[] = [];
+  const lift0 = fromZ - zOf(0);
+  let s0 = 0;
+  out.push({ x: pts[0][0], y: pts[0][1], z: zOf(0) + lift0, e: true });
+  for (let i = 1; i < pts.length; i++) {
+    const seg = Math.hypot(pts[i][0] - pts[i - 1][0], pts[i][1] - pts[i - 1][1]);
+    const s1 = s0 + seg;
+    if (s0 < length && s1 > length && seg > 0) {
+      const f = (length - s0) / seg;
+      const z = zOf(i - 1) + f * (zOf(i) - zOf(i - 1));
+      out.push({ x: pts[i - 1][0] + f * (pts[i][0] - pts[i - 1][0]), y: pts[i - 1][1] + f * (pts[i][1] - pts[i - 1][1]), z, e: true });
+    }
+    out.push({ x: pts[i][0], y: pts[i][1], z: zOf(i) + lift0 * Math.max(0, 1 - s1 / length), e: true });
+    s0 = s1;
+  }
+  return out;
+}
+
 function buildPlanar(tp: Toolpath, layers: Layer[], s: PrintSettings, start: Vec2): Vec2 {
   let cur: Vec2 = start;
   let below: Contour[] = [];
@@ -291,9 +315,19 @@ function buildPlanar(tp: Toolpath, layers: Layer[], s: PrintSettings, start: Vec
       const pending = [...wall];
       while (pending.length) {
         const loop = prepareLoop(pending.splice(nearestIndex(pending, cur), 1)[0], s, cur);
-        moveTo(tp, loop[0], layer.z, s, undefined, inside);
-        for (let i = 1; i < loop.length; i++) push(tp, { x: loop[i][0], y: loop[i][1], z: layer.z, e: true });
-        push(tp, { x: loop[0][0], y: loop[0][1], z: layer.z, e: true });
+        const last = tp.points[tp.points.length - 1];
+        // Layer change: no vertical step at the seam — the bead goes on along the new loop and
+        // climbs to the new height over the first `layerRamp` mm, like one continuous thread.
+        if (s.layerRamp > 0 && last?.e && layer.z > last.z && linkPrintable([last.x, last.y], loop[0], s, inside)) {
+          const ring = [...loop, loop[0]];
+          const pts = rampPoints(ring, () => layer.z, last.z, s.layerRamp);
+          const same = Math.hypot(pts[0].x - last.x, pts[0].y - last.y) < 1e-6;
+          for (const q of same ? pts.slice(1) : pts) push(tp, q);
+        } else {
+          moveTo(tp, loop[0], layer.z, s, undefined, inside);
+          for (let i = 1; i < loop.length; i++) push(tp, { x: loop[i][0], y: loop[i][1], z: layer.z, e: true });
+          push(tp, { x: loop[0][0], y: loop[0][1], z: layer.z, e: true });
+        }
         cur = loop[0];
       }
     }
