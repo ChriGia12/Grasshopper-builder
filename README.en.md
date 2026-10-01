@@ -22,7 +22,11 @@ The site is in **Italian and English**: the EN / IT button at the top right swit
 - if a number field is empty or invalid;
 - if the toolpath leaves the work table in plan, if with *tilt tool* some points have a slope along X that cannot be followed, or if in the chosen orientation the part has islands starting in mid-air or more than 2% of its surface overhanging beyond the critical angle: these cases need an explicit confirmation, reset at every change.
 
-**Limits.** The site does not check collisions of the arm or spindle with the table and the part, nor the PTP motion to the safe positions. The check of the intermediate LIN points covers the programmed geometric path, not the blended trajectory the controller runs with `C_DIS` (default, like Tavolino1): with `C_DIS` the robot does not pass exactly through every point; the option *LIN approximation → None* makes the robot stop on every point. Before printing, the `.src` must still be run dry or in the simulation of the real cell.
+**Collisions.** The path is replayed bead by bead: in every pose forearm, wrist (A3–A6) and spindle, sampled from the real cell geometry, must not touch the plate or the material already deposited (4 mm grid; the nozzle, which touches the bead by design, is checked only against the plate). The same check covers the PTP moves of the program: safe position → first point, last point → safe position and homing (axis interpolation, as the controller does). A collision blocks the export and the points involved are shown in magenta in the view.
+
+**Risk zones.** The part shows in orange the faces overhanging beyond the critical angle, in red the outline of islands starting in mid-air and in yellow the walls thinner than one bead (they would not be printed). They are hidden with the *Risk zones* box.
+
+**Limits.** The collision check uses a sampling of the geometry (points every 8 mm on the spindle, 25 mm on the arm) and ignores the upper arm, the base and the boards outside the plate. The check of the intermediate LIN points covers the programmed geometric path, not the blended trajectory the controller runs with `C_DIS` (default, like Tavolino1): with `C_DIS` the robot does not pass exactly through every point; the option *LIN approximation → None* makes the robot stop on every point. Before printing, the `.src` must still be run dry or in the simulation of the real cell.
 
 ## Fixed cell
 

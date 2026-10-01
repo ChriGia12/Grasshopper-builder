@@ -8,6 +8,8 @@ import { FIXED_ROBOT, validateSettings } from './core/validate';
 import { FLANGE_FRAME, KR16, linkTransforms, poseAt, robotRootFrame, type Joints, type ReachReport } from './core/robot';
 import { DEFAULT_PRINT, DEFAULT_ROBOT, type PrintSettings, type RobotSettings } from './core/settings';
 import type { Toolpath } from './core/toolpath';
+import { cellBodies, type Body, type CollisionReport } from './core/collision';
+import type { Zones } from './core/zones';
 import { Viewer } from './viewer';
 import { applyStatic, getLang, locale, msg, MsgError, setLang, t, tm, type Msg } from './i18n';
 import type { WorkerRequest } from './worker';
@@ -540,6 +542,8 @@ interface BuildMsg {
   errors: Msg[];
   offBed: boolean;
   support: { islands: number; overhang: number } | null;
+  zones: Zones;
+  collision: CollisionReport | null;
 }
 
 let currentMeta: Toolpath | null = null;
@@ -558,7 +562,7 @@ async function build(): Promise<BuildMsg | null> {
   let r: BuildMsg;
   try {
     r = await busy(t('busy.path'), () =>
-      run<BuildMsg>('build', { type: 'build', mesh: m, matrix, print: { ...print }, robot: structuredClone(robot), sourceName }),
+      run<BuildMsg>('build', { type: 'build', mesh: m, matrix, print: { ...print }, robot: structuredClone(robot), sourceName, bodies }),
     );
   } catch (e) {
     if (!(e instanceof Superseded) && seq === buildSeq) $('warnings').replaceChildren(li(tm(errText(e))));
@@ -572,6 +576,12 @@ async function build(): Promise<BuildMsg | null> {
   viewer.setBed(robot.bedSizeX, robot.bedSizeY, [robot.bedCenterX, robot.bedCenterY, robot.bedTopZ]);
   viewer.setToolpath(r.xyz, r.ext, r.meta.layerStart, r.offset);
   viewer.setStartMarker(r.xyz.length ? [r.xyz[0] + r.offset[0], r.xyz[1] + r.offset[1], r.xyz[2] + r.offset[2]] : null);
+  viewer.setZones(r.zones, r.mesh, r.offset);
+  viewer.setCollisions(
+    r.collision?.points.length
+      ? Float32Array.from(r.collision.points.flatMap((i) => [0, 1, 2].map((k) => r.xyz[i * 3 + k] + r.offset[k])))
+      : null,
+  );
   const slider = $<HTMLInputElement>('layerSlider');
   slider.max = String(Math.max(0, r.meta.layerStart.length - 1));
   slider.value = slider.max;
@@ -684,10 +694,13 @@ $<HTMLInputElement>('simSlider').addEventListener('input', (e) => {
 });
 $<HTMLInputElement>('opacity').addEventListener('input', (e) => viewer.setModelOpacity(+(e.target as HTMLInputElement).value));
 $('fitBtn').onclick = () => viewer.fit();
+$<HTMLInputElement>('zonesToggle').addEventListener('change', (e) => viewer.setZonesVisible((e.target as HTMLInputElement).checked));
 
 // ---------- fixed robot cell ----------
 
 let robotPose: Joints = [...robot.safeAxes] as Joints;
+/** Arm and mandrino samples for the collision check (available once the cell is loaded). */
+let bodies: Body[] | undefined;
 function showRobot(q: Joints) {
   robotPose = q;
   const f = robotRootFrame(robot);
@@ -695,9 +708,11 @@ function showRobot(q: Joints) {
 }
 viewer
   .loadCell('./cell')
-  .then(() => {
+  .then(({ parts, bin }) => {
+    bodies = cellBodies(parts, bin, robot.toolData.slice(0, 3) as [number, number, number]);
     showRobot(robotPose);
     if (!mesh) viewer.fit();
+    else buildSoon(); // a result computed before the cell was loaded had no collision check
   })
   .catch(() => setNotes([], msg('e.cell')));
 
@@ -796,6 +811,8 @@ function exportBlocks(): string[] {
   if (!r || !lastSrc) return [];
   const out: string[] = [];
   if (r.errors.length) out.push(t('out.blockedErrors'));
+  // Without the cell the collision check could not run: never export unchecked.
+  if (!r.collision) out.push(t('out.blockedNoCell'));
   // A path the robot cannot follow must not reach the controller.
   if (r.reach.unreachable > 0 || r.reach.outOfLimits > 0) out.push(t('out.blocked'));
   if (r.offBed && !offBedOk.checked) out.push(t('out.blockedOffBed'));

@@ -4,11 +4,12 @@ import { runBuild } from './core/pipeline';
 import { MsgError, SettingsError } from './i18n';
 import type { Mat3, MeshData } from './core/mesh';
 import type { PrintSettings, RobotSettings } from './core/settings';
+import type { Body } from './core/collision';
 
 export type WorkerRequest =
   | { type: 'ping'; id: number }
   | { type: 'analyze'; id: number; mesh: MeshData; print: PrintSettings }
-  | { type: 'build'; id: number; mesh: MeshData; matrix: Mat3; print: PrintSettings; robot: RobotSettings; sourceName: string };
+  | { type: 'build'; id: number; mesh: MeshData; matrix: Mat3; print: PrintSettings; robot: RobotSettings; sourceName: string; bodies?: Body[] };
 
 self.onmessage = (ev: MessageEvent<WorkerRequest>) => {
   const req = ev.data;
@@ -19,7 +20,7 @@ self.onmessage = (ev: MessageEvent<WorkerRequest>) => {
       const orientations = analyzeOrientations(req.mesh, req.print.overhangAngle, req.print.layerHeight, req.print.thinWallMax);
       self.postMessage({ type: 'analyze', id: req.id, orientations });
     } else {
-      const r = runBuild(req.mesh, req.matrix, req.print, req.robot, req.sourceName);
+      const r = runBuild(req.mesh, req.matrix, req.print, req.robot, req.sourceName, req.bodies);
       // Flatten the path into typed arrays for a cheap transfer to the viewer.
       const pts = r.toolpath.points;
       const xyz = new Float32Array(pts.length * 3);
@@ -33,7 +34,7 @@ self.onmessage = (ev: MessageEvent<WorkerRequest>) => {
       });
       const meta = { ...r.toolpath, points: [] };
       self.postMessage(
-        { type: 'build', id: req.id, xyz, ext, cc, meta, src: r.src, offset: r.offset, mesh: r.mesh, min: r.min, max: r.max, reach: r.reach, errors: r.errors, offBed: r.offBed, support: r.support },
+        { type: 'build', id: req.id, xyz, ext, cc, meta, src: r.src, offset: r.offset, mesh: r.mesh, min: r.min, max: r.max, reach: r.reach, errors: r.errors, offBed: r.offBed, support: r.support, zones: r.zones, collision: r.collision },
         { transfer: [xyz.buffer, ext.buffer, cc.buffer] },
       );
     }

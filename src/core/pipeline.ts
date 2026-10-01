@@ -5,8 +5,10 @@ import { writeKukaSrc } from './kuka';
 import { applyMatrix, computeBounds, dropToOrigin, mulMat3, rotZ, type Mat3, type MeshData } from './mesh';
 import type { PrintSettings, RobotSettings } from './settings';
 import { reachReport, type ReachReport } from './robot';
-import { buildToolpath, type Toolpath } from './toolpath';
+import { buildToolpath, sliceForPrint, type Toolpath } from './toolpath';
+import { riskZones, type Zones } from './zones';
 import { evaluateOrientation, OVERHANG_LIMIT, supportOk } from './orientation';
+import { collisionReport, type Body, type CollisionReport } from './collision';
 
 export interface BuildResult {
   toolpath: Toolpath;
@@ -25,6 +27,10 @@ export interface BuildResult {
   offBed: boolean;
   /** Overhangs or islands that need support in this orientation: export needs a confirmation. */
   support: { islands: number; overhang: number } | null;
+  /** Overhangs, islands in mid-air and too-thin walls, drawn on the part (part frame). */
+  zones: Zones;
+  /** Arm / mandrino against plate and printed part (null when the cell bodies are not given). */
+  collision: CollisionReport | null;
 }
 
 /** Where the local part frame lands in BASE coordinates. */
@@ -45,6 +51,8 @@ export function runBuild(
   print: PrintSettings,
   robot: RobotSettings,
   sourceName: string,
+  /** Sampled arm and mandrino (collision.ts cellBodies); without them no collision check. */
+  bodies?: Body[],
 ): BuildResult {
   // Parameters are checked before any geometry: an out-of-range value (e.g. thousands of passes)
   // must not start a computation that could take minutes or exhaust memory.
@@ -54,7 +62,9 @@ export function runBuild(
   const offset = placementOffset(original, robot);
   const start: [number, number] | undefined =
     print.startMode === 'point' ? [print.startX - offset[0], print.startY - offset[1]] : undefined;
-  const toolpath = buildToolpath(mesh, print, undefined, start);
+  const summary = print.mode === 'surface' ? undefined : sliceForPrint(mesh, print);
+  const toolpath = buildToolpath(mesh, print, summary, start);
+  const zones = riskZones(mesh, summary?.layers ?? null, print);
   const placed: RobotSettings = { ...robot, originX: offset[0], originY: offset[1], originZ: offset[2] };
   const src = writeKukaSrc(toolpath, placed, { sourceName, layerHeight: print.layerHeight });
 
@@ -96,5 +106,14 @@ export function runBuild(
       toolpath.warnings.push(msg('w.support', { n: e.unsupported, p: support.overhang, lim: OVERHANG_LIMIT * 100, a: print.overhangAngle }));
     }
   }
-  return { toolpath, src, offset, mesh, min, max, reach, errors, offBed, support };
+  // Collisions block the export: arm or mandrino into the plate or the part cannot be confirmed.
+  let collision: CollisionReport | null = null;
+  if (bodies?.length) {
+    const ext = Uint8Array.from(toolpath.points, (p) => (p.e ? 1 : 0));
+    collision = collisionReport(basePts, ext, reach.joints, bodies, robot, print, { first: reach.first, last: reach.last });
+    if (collision.count)
+      errors.push(msg('v.collision', { n: collision.count, lin: collision.first + 1, what: `c.${collision.what}`, body: collision.body }));
+    for (const c of collision.ptp) errors.push(msg('v.ptpCollision', { move: `c.move.${c.move}`, what: `c.${c.what}`, body: c.body }));
+  }
+  return { toolpath, src, offset, mesh, min, max, reach, errors, offBed, support, zones, collision };
 }

@@ -73,6 +73,20 @@ export function intersectContours(a: Contour[], b: Contour[]): Contour[] {
   );
 }
 
+/** Boolean difference a − b of two sets of closed contours (holes included). */
+export function differenceContours(a: Contour[], b: Contour[]): Contour[] {
+  const toPaths = (cs: Contour[]) =>
+    cs.filter((c) => c.closed).map((c) => c.pts.map(([x, y]) => ({ X: Math.round(x * SCALE), Y: Math.round(y * SCALE) })));
+  const clipper = new ClipperLib.Clipper();
+  clipper.AddPaths(toPaths(a), ClipperLib.PolyType.ptSubject, true);
+  clipper.AddPaths(toPaths(b), ClipperLib.PolyType.ptClip, true);
+  const out: { X: number; Y: number }[][] = [];
+  clipper.Execute(ClipperLib.ClipType.ctDifference, out, ClipperLib.PolyFillType.pftEvenOdd, ClipperLib.PolyFillType.pftEvenOdd);
+  return classify(
+    out.filter((p) => p.length >= 3).map((p) => ({ pts: p.map((q) => [q.X / SCALE, q.Y / SCALE] as Vec2), closed: true, depth: 0 })),
+  );
+}
+
 /** Group classified loops into islands: each outer loop with the holes directly inside it. */
 export function islands(contours: Contour[]): Contour[][] {
   const loops = contours.filter((c) => c.closed);

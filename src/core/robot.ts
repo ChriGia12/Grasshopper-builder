@@ -205,6 +205,9 @@ export interface ReachReport {
   jointMin: number[];
   jointMax: number[];
   first: Joints | null; // pose at the first point, for the viewer
+  last: Joints | null; // pose at the last point (start of the final PTP)
+  /** Axes A1…A6 at every path point (6 per point), NaN where the point is unreachable. */
+  joints: Float64Array;
 }
 
 /**
@@ -213,10 +216,21 @@ export interface ReachReport {
  * TCP on the straight line between points.
  */
 export function reachReport(pointsBase: ArrayLike<number>, r: RobotSettings, cs?: ArrayLike<number>, segStep = 20): ReachReport {
-  const rep: ReachReport = { unreachable: 0, outOfLimits: 0, jumps: 0, jointMin: Array(6).fill(Infinity), jointMax: Array(6).fill(-Infinity), first: null };
-  let prev: Joints | undefined;
   const n = pointsBase.length / 3;
-  const solve = (p: V3, c: number | undefined, counted: boolean) => {
+  const rep: ReachReport = {
+    unreachable: 0,
+    outOfLimits: 0,
+    jumps: 0,
+    jointMin: Array(6).fill(Infinity),
+    jointMax: Array(6).fill(-Infinity),
+    first: null,
+    last: null,
+    joints: new Float64Array(n * 6).fill(NaN),
+  };
+  let prev: Joints | undefined;
+  /** `at`: index of the path point, or −1 for an intermediate LIN sample. */
+  const solve = (p: V3, c: number | undefined, at: number) => {
+    const counted = at >= 0;
     const t = flangeTarget(p, c !== undefined && Number.isFinite(c) ? { ...r, c } : r);
     const q = inverseKinematics(t.R, t.p, prev);
     if (!q) {
@@ -227,6 +241,8 @@ export function reachReport(pointsBase: ArrayLike<number>, r: RobotSettings, cs?
     if (!withinLimits(q)) rep.outOfLimits++;
     if (counted) {
       if (!rep.first) rep.first = q;
+      rep.last = q;
+      rep.joints.set(q, at * 6);
       q.forEach((v, k) => {
         rep.jointMin[k] = Math.min(rep.jointMin[k], v);
         rep.jointMax[k] = Math.max(rep.jointMax[k], v);
@@ -244,10 +260,10 @@ export function reachReport(pointsBase: ArrayLike<number>, r: RobotSettings, cs?
       for (let k = 1; k < steps; k++) {
         const f = k / steps;
         const c = c0 !== undefined && c1 !== undefined && Number.isFinite(c0) && Number.isFinite(c1) ? c0 + (c1 - c0) * f : undefined;
-        solve([a[0] + (p[0] - a[0]) * f, a[1] + (p[1] - a[1]) * f, a[2] + (p[2] - a[2]) * f], c, false);
+        solve([a[0] + (p[0] - a[0]) * f, a[1] + (p[1] - a[1]) * f, a[2] + (p[2] - a[2]) * f], c, -1);
       }
     }
-    solve(p, cs?.[i], true);
+    solve(p, cs?.[i], i);
   }
   return rep;
 }

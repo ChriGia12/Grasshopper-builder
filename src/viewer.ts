@@ -26,6 +26,8 @@ export class Viewer {
   private links: THREE.Mesh[] = [];
   private tool: THREE.Mesh | null = null;
   private startMarker: THREE.Mesh;
+  private zones = new THREE.Group();
+  private hits: THREE.Points | null = null;
   private pickMode: 'none' | 'place' | 'start' = 'none';
   private bedZ = 0;
   /** Called with BASE coordinates when the user clicks the bed in a pick mode. */
@@ -120,6 +122,58 @@ export class Viewer {
     this.setModelOpacity(opacity);
   }
 
+  /**
+   * Risk zones on the part (part frame, moved by `offset`): overhanging faces in orange,
+   * outlines of islands starting in mid-air in red and of too-thin walls in yellow.
+   */
+  setZones(z: { overhang: Uint32Array; islands: Float32Array; thin: Float32Array } | null, mesh: MeshData | null, offset: [number, number, number]) {
+    for (const o of [...this.zones.children]) {
+      this.zones.remove(o);
+      (o as THREE.Mesh).geometry.dispose();
+    }
+    this.scene.add(this.zones);
+    if (!z || !mesh) return;
+    this.zones.position.set(...offset);
+    if (z.overhang.length) {
+      const idx = new Uint32Array(z.overhang.length * 3);
+      z.overhang.forEach((t, k) => idx.set(mesh.indices.subarray(t * 3, t * 3 + 3), k * 3));
+      const g = new THREE.BufferGeometry();
+      g.setAttribute('position', new THREE.BufferAttribute(mesh.positions, 3));
+      g.setIndex(new THREE.BufferAttribute(idx, 1));
+      const mat = new THREE.MeshBasicMaterial({ color: 0xff8a1f, transparent: true, opacity: 0.55, side: THREE.DoubleSide, depthWrite: false });
+      mat.polygonOffset = true;
+      mat.polygonOffsetFactor = -2;
+      this.zones.add(new THREE.Mesh(g, mat));
+    }
+    for (const [pts, color] of [
+      [z.islands, 0xff2d2d],
+      [z.thin, 0xffe03b],
+    ] as const) {
+      if (!pts.length) continue;
+      const g = new THREE.BufferGeometry();
+      g.setAttribute('position', new THREE.BufferAttribute(pts, 3));
+      this.zones.add(new THREE.LineSegments(g, new THREE.LineBasicMaterial({ color, depthTest: false })));
+    }
+  }
+
+  setZonesVisible(v: boolean) {
+    this.zones.visible = v;
+  }
+
+  /** Path points (BASE) where the arm or the mandrino collides: magenta dots. */
+  setCollisions(xyz: Float32Array | null) {
+    if (this.hits) {
+      this.scene.remove(this.hits);
+      this.hits.geometry.dispose();
+      this.hits = null;
+    }
+    if (!xyz?.length) return;
+    const g = new THREE.BufferGeometry();
+    g.setAttribute('position', new THREE.BufferAttribute(xyz, 3));
+    this.hits = new THREE.Points(g, new THREE.PointsMaterial({ color: 0xff00d4, size: 9, sizeAttenuation: false, depthTest: false }));
+    this.scene.add(this.hits);
+  }
+
   setPickMode(mode: 'none' | 'place' | 'start') {
     this.pickMode = mode;
     this.renderer.domElement.style.cursor = mode === 'none' ? '' : 'crosshair';
@@ -159,7 +213,7 @@ export class Viewer {
    * Fixed robot cell (public/cell.bin, extracted from BASE ROBOT.3dm): table and plate in the
    * BASE frame, KR16 links in their home pose, mandrino in the flange frame. Always shown.
    */
-  async loadCell(url: string) {
+  async loadCell(url: string): Promise<{ parts: CellPart[]; bin: ArrayBuffer }> {
     const [header, bin] = await Promise.all([
       fetch(url + '.json').then((r) => r.json()),
       fetch(url + '.bin').then((r) => r.arrayBuffer()),
@@ -179,6 +233,7 @@ export class Viewer {
       }
     }
     this.scene.add(this.robotRoot);
+    return { parts: header.parts as CellPart[], bin };
   }
 
   /**

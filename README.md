@@ -22,7 +22,11 @@ Il sito è in **italiano e inglese**: il pulsante EN / IT in alto a destra cambi
 - se un campo numerico è vuoto o non valido;
 - se il percorso esce dal piano di lavoro in pianta, se con *inclina utensile* ci sono punti con pendenza lungo X non seguibile, o se nell'orientamento scelto il pezzo ha isole che partono nel vuoto o più del 2% di superficie in sbalzo oltre l'angolo critico: in questi casi serve una conferma esplicita, che si azzera a ogni modifica.
 
-**Limiti.** Il sito non verifica le collisioni del braccio o del mandrino con tavola e pezzo, né il moto PTP verso le posizioni di sicurezza. Il controllo dei LIN intermedi verifica il percorso geometrico programmato, non la traiettoria raccordata che il controller esegue con `C_DIS` (default, come Tavolino1): con `C_DIS` il robot non passa esattamente per ogni punto; l'opzione *Approssimazione LIN → Nessuna* fa fermare il robot su ogni punto. Prima della stampa il `.src` va comunque provato a vuoto o nella simulazione della cella reale.
+**Collisioni.** Il percorso viene rieseguito cordolo per cordolo: in ogni posa avambraccio, polso (A3–A6) e mandrino, campionati dalla geometria reale della cella, non devono toccare la lastra né il materiale già depositato (griglia di 4 mm; l'ugello, che tocca il cordolo per costruzione, è controllato solo contro la lastra). Lo stesso controllo vale per i movimenti PTP del programma: posizione sicura → primo punto, ultimo punto → posizione sicura e homing (interpolazione degli assi come fa il controller). Una collisione blocca l'esportazione e i punti coinvolti compaiono in magenta nella vista.
+
+**Zone a rischio.** Sul pezzo sono evidenziati in arancione le facce in sbalzo oltre l'angolo critico, in rosso il contorno delle isole che partono nel vuoto e in giallo le pareti più sottili di un cordolo (non verrebbero stampate). Si nascondono con la casella *Zone a rischio*.
+
+**Limiti.** Il controllo delle collisioni usa una campionatura della geometria (punti ogni 8 mm sul mandrino, 25 mm sul braccio) e non considera braccio superiore, base e tavole fuori dalla lastra. Il controllo dei LIN intermedi verifica il percorso geometrico programmato, non la traiettoria raccordata che il controller esegue con `C_DIS` (default, come Tavolino1): con `C_DIS` il robot non passa esattamente per ogni punto; l'opzione *Approssimazione LIN → Nessuna* fa fermare il robot su ogni punto. Prima della stampa il `.src` va comunque provato a vuoto o nella simulazione della cella reale.
 
 ## Cella fissa
 
