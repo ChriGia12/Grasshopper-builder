@@ -47,10 +47,11 @@ describe('table and reach checks', () => {
     expect(ok.offBed).toBe(false);
   });
   it('checks the intermediate points of a long LIN, not only its ends', () => {
-    // Wrist centre = TCP + (−78.1, 0, 526.55) with the tool vertical. Both ends keep the wrist
-    // ~180 mm from the A2 axis; the straight line between them crosses the A2 axis itself
-    // (dead zone of radius |980 − 873| ≈ 107 mm), so its middle is unreachable.
-    const tcp = (y: number) => [160 + 78.1 - 1448, y, 520 - 526.55 - 5];
+    // With the tool vertical the flange face looks along +X: wrist centre = TCP + (−78.1, 0, 372.65)
+    // − 153.9 along X. Both ends keep the wrist ~180 mm from the A2 axis; the straight line between
+    // them crosses the A2 axis itself (dead zone of radius |980 − 873| ≈ 107 mm), so its middle is
+    // unreachable.
+    const tcp = (y: number) => [160 + 78.111 + 153.9 - 1448, y, 520 - 372.65 - 5];
     const ends = [...tcp(-300), ...tcp(300)];
     const withSamples = reachReport(ends, DEFAULT_ROBOT);
     const endsOnly = reachReport(ends, DEFAULT_ROBOT, undefined, 1e9);

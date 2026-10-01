@@ -40,7 +40,7 @@ node scripts/build-cell.mjs "/path/BASE ROBOT.3dm"
 
 The robot stands in the Rhino world at (0, −1000, 0): the point drawn in `BASE ROBOT.3dm` moved by −1000 in Y, centred on the table like the BASE, with its base 32 mm below the top of the boards. The BASE of the Python post-processor, (1448, −1000, 5) in world coordinates, is therefore at (1448, 0, 5) from the robot.
 
-**Tool orientation.** The spindle axis is the TCP Z axis, as calibrated on the robot: with A = −180°, B = 0° the C parameter tilts the tool (C 180 = vertical pointing down, C 135 ≈ 45°, C 90 / 270 = horizontal). With A −180 / B 0 / C 180 the robot works vertically above the point.
+**Tool orientation.** The spindle axis is the TCP Z axis, as calibrated on the robot: with A = −180°, B = 0° the C parameter tilts the tool (C 180 = vertical pointing down, C 135 ≈ 45°, C 90 / 270 = horizontal). With A −180 / B 0 / C 180 the robot works vertically above the point. The spindle is mounted with its plate on the flange face and its axis parallel to it (KUKA FLANGE frame: Z out of the flange, as in `TOOL_DATA` and in the Mandrino layer drawing): with the tool vertical the flange faces sideways and the wrist is bent, as on the real robot.
 
 **Simulation.** The *▶ Simulate* button makes the robot run the `LIN` moves of the `.src` file, at the real speed ($VEL.CP) multiplied by 1–500×. The part of the path already run is coloured, the rest stays light grey; below you see the current `LIN` line, the X/Y/Z/A/B/C values written in the file and the A1–A6 angles. The slider jumps to any move, the layer slider to the end of a layer. For every point the site solves the inverse kinematics and flags points out of reach or beyond the axis limits.
 

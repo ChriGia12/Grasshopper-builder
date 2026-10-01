@@ -107,12 +107,20 @@ export function linkTransforms(q: Joints): Mat4[] {
   return out;
 }
 
-/** Flange pose (rotation, position) in the robot root frame. */
+/**
+ * KUKA FLANGE frame in the link-6 frame of linkTransforms (whose X is the A6 axis, out of the
+ * flange): Z out of the flange and X down at the home pose — the controller shows A 0, B 90, C 0
+ * there. TOOL_DATA and the mandrino drawing (layer Mandrino of BASE ROBOT.3dm, mounting plate on
+ * z = 0) are both expressed in this frame.
+ */
+export const FLANGE_FRAME: M3 = rotAxisY(90);
+
+/** KUKA FLANGE pose (rotation, position) in the robot root frame. */
 export function flangePose(q: Joints): { R: M3; p: V3 } {
   const T = linkTransforms(q)[6];
   const f = KR16.flangeHome;
   return {
-    R: [T[0], T[1], T[2], T[4], T[5], T[6], T[8], T[9], T[10]],
+    R: mulMM([T[0], T[1], T[2], T[4], T[5], T[6], T[8], T[9], T[10]], FLANGE_FRAME),
     p: [T[0] * f[0] + T[1] * f[1] + T[2] * f[2] + T[3], T[4] * f[0] + T[5] * f[1] + T[6] * f[2] + T[7], T[8] * f[0] + T[9] * f[1] + T[10] * f[2] + T[11]],
   };
 }
@@ -120,9 +128,10 @@ export function flangePose(q: Joints): { R: M3; p: V3 } {
 const deg = (r: number) => (r * 180) / Math.PI;
 const wrap = (a: number) => ((((a + 180) % 360) + 360) % 360) - 180;
 
-/** Analytic inverse kinematics (elbow up, no flip); null when the pose is out of reach. */
-export function inverseKinematics(R: M3, p: V3, prev?: Joints): Joints | null {
+/** Analytic inverse kinematics for a KUKA FLANGE pose (elbow up, no flip); null when out of reach. */
+export function inverseKinematics(Rf: M3, p: V3, prev?: Joints): Joints | null {
   const k = KR16;
+  const R = mulMM(Rf, transpose(FLANGE_FRAME)); // link-6 frame: X along the A6 axis
   const w: V3 = [p[0] - k.d6 * R[0], p[1] - k.d6 * R[3], p[2] - k.d6 * R[6]];
   const q1 = -deg(Math.atan2(w[1], w[0]));
   const r = Math.hypot(w[0], w[1]) - k.a1;
@@ -162,8 +171,9 @@ export function inverseKinematics(R: M3, p: V3, prev?: Joints): Joints | null {
 
 /**
  * The spindle works along the TCP Z axis (calibrated on the robot: A −180, B 0, C 180 = tool
- * vertical, C tilts it — see "Riferimento orientamento utensile"). The KUKA flange has X out of
- * the flange, so the TCP frame is the tool frame turned +90° about Y.
+ * vertical, C tilts it — see "Riferimento orientamento utensile"). The spindle lies along the
+ * FLANGE X axis (parallel to the flange face, 78 mm from it), so the TCP frame is the FLANGE
+ * frame turned +90° about Y.
  */
 const TOOL_AXIS = rotAxisY(90);
 function rotAxisY(d: number): M3 {

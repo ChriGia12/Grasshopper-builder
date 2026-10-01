@@ -15,8 +15,9 @@ describe('robot frames', () => {
     expect(f.p[0]).toBeCloseTo(1448 - 78.111, 3);
     expect(f.p[1]).toBeCloseTo(0, 3);
     expect(f.p[2]).toBeCloseTo(5 + 372.65, 3);
-    // flange normal (KUKA flange X) points down, like the spindle
+    // the spindle (FLANGE X) points down; the flange face (FLANGE Z) looks sideways along +X
     expect(f.R[6]).toBeCloseTo(-1, 6);
+    expect(f.R[2]).toBeCloseTo(1, 6);
   });
 
   it('C tilts the spindle: C 90 lays it horizontal', () => {

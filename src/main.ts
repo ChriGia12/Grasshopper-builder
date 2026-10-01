@@ -5,7 +5,7 @@ import { IDENTITY, dropToOrigin, meshStats, mulMat3, rotX, rotY, rotZ, type Mat3
 import type { OrientationCandidate } from './core/orientation';
 import { placementOffset } from './core/pipeline';
 import { FIXED_ROBOT, validateSettings } from './core/validate';
-import { KR16, linkTransforms, poseAt, robotRootFrame, type Joints, type ReachReport } from './core/robot';
+import { FLANGE_FRAME, KR16, linkTransforms, poseAt, robotRootFrame, type Joints, type ReachReport } from './core/robot';
 import { DEFAULT_PRINT, DEFAULT_ROBOT, type PrintSettings, type RobotSettings } from './core/settings';
 import type { Toolpath } from './core/toolpath';
 import { Viewer } from './viewer';
@@ -691,7 +691,7 @@ let robotPose: Joints = [...robot.safeAxes] as Joints;
 function showRobot(q: Joints) {
   robotPose = q;
   const f = robotRootFrame(robot);
-  viewer.setRobotPose(f.p, f.R, linkTransforms(q), KR16.flangeHome);
+  viewer.setRobotPose(f.p, f.R, linkTransforms(q), KR16.flangeHome, FLANGE_FRAME);
 }
 viewer
   .loadCell('./cell')

@@ -181,15 +181,23 @@ export class Viewer {
     this.scene.add(this.robotRoot);
   }
 
-  /** Place the robot root (BASE frame) and pose the arm; `links` are row-major 4×4 from linkTransforms. */
-  setRobotPose(root: [number, number, number], rootRotation: number[], links: number[][], flange: [number, number, number]) {
+  /**
+   * Place the robot root (BASE frame) and pose the arm; `links` are row-major 4×4 from
+   * linkTransforms. The mandrino is drawn in the KUKA FLANGE frame: `flangeFrame` (row-major 3×3)
+   * turns it into the link-6 frame, at the flange centre `flange`.
+   */
+  setRobotPose(root: [number, number, number], rootRotation: number[], links: number[][], flange: [number, number, number], flangeFrame: number[]) {
     const R = rootRotation;
     this.robotRoot.matrixAutoUpdate = false;
     this.robotRoot.matrix.set(R[0], R[1], R[2], root[0], R[3], R[4], R[5], root[1], R[6], R[7], R[8], root[2], 0, 0, 0, 1);
     links.forEach((m, k) => this.links[k]?.matrix.set(...(m as Parameters<THREE.Matrix4['set']>)));
     if (this.tool) {
       const m = links[6];
-      this.tool.matrix.set(...(m as Parameters<THREE.Matrix4['set']>)).multiply(new THREE.Matrix4().makeTranslation(...flange));
+      const F = flangeFrame;
+      this.tool.matrix
+        .set(...(m as Parameters<THREE.Matrix4['set']>))
+        .multiply(new THREE.Matrix4().makeTranslation(...flange))
+        .multiply(new THREE.Matrix4().set(F[0], F[1], F[2], 0, F[3], F[4], F[5], 0, F[6], F[7], F[8], 0, 0, 0, 0, 1));
     }
   }
 
