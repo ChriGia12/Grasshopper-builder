@@ -53,6 +53,16 @@ describe('layer change ramp', () => {
       }
     });
 
+  it('near a flat top the loops move apart, the bead still climbs on a ramp (no lift, no vertical)', () => {
+    // A low cone: the horizontal loops near its top are several mm apart in plan.
+    const cone = weld(cylinder(90, 8, 12)); // loops ~10 mm apart in plan, more than maxBridge (8)
+    const tp = buildToolpath(cone, { ...DEFAULT_PRINT, mode: 'planar' });
+    expect(tp.travels).toBe(0);
+    const ch = changes(tp);
+    expect(ch.length).toBeGreaterThan(5);
+    for (const c of ch) expect(c.steepest).toBeLessThan(0.2);
+  });
+
   it('ramp 0: the old vertical step at the seam', () => {
     const ch = changes(buildToolpath(tube, { ...DEFAULT_PRINT, mode: 'planar', layerRamp: 0 }));
     expect(ch.every((c) => c.steepest > 1)).toBe(true); // 1.5 mm up within a fraction of a mm

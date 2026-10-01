@@ -590,14 +590,15 @@ export function buildRings(input: MeshData, s: PrintSettings, start: Vec2, spira
       if (s.layerRamp > 0 && last?.e && r.closed && rings.length === 1 && pts[0][2] > last.z && printable(pts[0], true)) {
         // Ring change as a ramp: the bead goes on along the new ring, climbing from the height
         // where the last ring ended to the ring's own height over the first `layerRamp` mm.
-        const ring = [...pts, pts[0]];
+        // The climb starts where the last ring ended: the step to the new ring already rises.
+        const ring: V3[] = [[last.x, last.y, pts[0][2]], ...pts, pts[0]];
         const ramped = rampPoints(
           ring.map((q) => [q[0], q[1]] as Vec2),
           (i) => ring[i][2],
           last.z,
           s.layerRamp,
         );
-        for (const q of ramped) add([q.x, q.y, q.z], true);
+        for (const q of ramped.slice(1)) add([q.x, q.y, q.z], true);
       } else {
         reach(pts[0], rings.length === 1);
         for (const q of pts.slice(1)) add(q, true);

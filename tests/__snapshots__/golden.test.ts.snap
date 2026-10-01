@@ -17,7 +17,7 @@ exports[`reference part: sella.stp > planar: same path, same checks, same .src 1
   "max": [
     130,
     640,
-    107,
+    104,
   ],
   "min": [
     -120,
@@ -25,11 +25,11 @@ exports[`reference part: sella.stp > planar: same path, same checks, same .src 1
     38.5,
   ],
   "outOfLimits": 0,
-  "points": 1075,
-  "printLength": 36507,
+  "points": 1070,
+  "printLength": 36566,
   "ptp": 0,
   "support": null,
-  "travels": 24,
+  "travels": 19,
   "unreachable": 0,
   "warnings": [],
 }

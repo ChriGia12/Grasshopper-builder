@@ -317,12 +317,14 @@ export function buildPlanar(tp: Toolpath, layers: Layer[], s: PrintSettings, sta
         const loop = prepareLoop(pending.splice(nearestIndex(pending, cur), 1)[0], s, cur);
         const last = tp.points[tp.points.length - 1];
         // Layer change: no vertical step at the seam — the bead goes on along the new loop and
-        // climbs to the new height over the first `layerRamp` mm, like one continuous thread.
-        if (s.layerRamp > 0 && last?.e && layer.z > last.z && linkPrintable([last.x, last.y], loop[0], s, inside)) {
-          const ring = [...loop, loop[0]];
-          const pts = rampPoints(ring, () => layer.z, last.z, s.layerRamp);
-          const same = Math.hypot(pts[0].x - last.x, pts[0].y - last.y) < 1e-6;
-          for (const q of same ? pts.slice(1) : pts) push(tp, q);
+        // climbs to the new height over the first `layerRamp` mm, like one continuous thread. The
+        // step to the new loop lies on the layer just printed (checked), so it may be as long as
+        // a serpentine link (8 beads): on a flat top the loops move apart more than `maxBridge`.
+        const change = layer.z > (last?.z ?? Infinity);
+        if (s.layerRamp > 0 && last?.e && change && linkPrintable([last.x, last.y], loop[0], s, inside, true)) {
+          // The climb starts where the last layer ended: the step to the new loop already rises.
+          const ring: Vec2[] = [[last.x, last.y], ...loop, loop[0]];
+          for (const q of rampPoints(ring, () => layer.z, last.z, s.layerRamp).slice(1)) push(tp, q);
         } else {
           moveTo(tp, loop[0], layer.z, s, undefined, inside);
           for (let i = 1; i < loop.length; i++) push(tp, { x: loop[i][0], y: loop[i][1], z: layer.z, e: true });
