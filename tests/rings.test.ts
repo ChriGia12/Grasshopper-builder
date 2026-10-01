@@ -3,7 +3,7 @@
 import { describe, expect, it } from 'vitest';
 import { beadField, beadStep, buildRings, levelRings } from '../src/core/rings';
 import { buildToolpath } from '../src/core/toolpath';
-import { mergeMeshes, weld, type MeshData } from '../src/core/mesh';
+import { applyMatrix, dropToOrigin, mergeMeshes, rotX, weld, type MeshData } from '../src/core/mesh';
 import { DEFAULT_PRINT, type PrintSettings } from '../src/core/settings';
 import { box, cylinder } from './fixtures';
 
@@ -95,6 +95,26 @@ describe('rings on a dome', () => {
     expect(Math.max(...jumps)).toBeLessThan(2 * s.wallSpacing);
     // within a turn Z changes smoothly (no 1.5 mm step at one point)
     for (let i = tp.layerStart[3]; i < tp.layerStart[4]; i++) expect(Math.abs(pts[i + 1].z - pts[i].z)).toBeLessThan(0.75);
+  });
+});
+
+describe('an open shell whose edge is not flat (like an upside-down hull)', () => {
+  // An open dome (no bottom) tilted 15°: its edge touches the table at one point only. The rings
+  // must not fan out from that point: the bottom is printed like contour layers (a base with the
+  // first full outline) and from the first complete loop the rings go round the part.
+  const open = dome(60);
+  const shell = weld({ positions: open.positions, indices: open.indices.slice(0, open.indices.length - 48 * 3) });
+  const tilted = dropToOrigin(applyMatrix(shell, rotX(15)));
+
+  it('every loop goes all the way round the part', () => {
+    const tp = buildToolpath(tilted, { ...s, mode: 'planar' });
+    expect(tp.travels).toBe(0);
+    const spans = tp.layerStart.map((st, k) => {
+      const loop = tp.points.slice(st, tp.layerStart[k + 1] ?? tp.points.length);
+      return Math.max(...loop.map((p) => p.x)) - Math.min(...loop.map((p) => p.x));
+    });
+    // the dome is 120 mm across: the loops on its lower half all span most of it
+    for (const w of spans.slice(0, Math.floor(spans.length / 2))) expect(w).toBeGreaterThan(90);
   });
 });
 

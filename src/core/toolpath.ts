@@ -303,7 +303,7 @@ export function rampPoints(pts: Vec2[], zOf: (i: number) => number, fromZ: numbe
   return out;
 }
 
-function buildPlanar(tp: Toolpath, layers: Layer[], s: PrintSettings, start: Vec2): Vec2 {
+export function buildPlanar(tp: Toolpath, layers: Layer[], s: PrintSettings, start: Vec2): Vec2 {
   let cur: Vec2 = start;
   let below: Contour[] = [];
   for (const layer of layers) {

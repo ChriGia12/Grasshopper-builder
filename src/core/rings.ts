@@ -11,10 +11,11 @@
 // line φ = k + ½. The surface closes up to the top: the last rings shrink to nothing.
 import { msg } from '../i18n';
 import type { MeshData } from './mesh';
-import { computeBounds } from './mesh';
+import { computeBounds, cutBelow, translate } from './mesh';
 import type { PrintSettings } from './settings';
-import { rampPoints, type PathPoint, type Toolpath } from './toolpath';
-import { pointInPolygon, type Vec2 } from './polyline';
+import { buildPlanar, rampPoints, sliceForPrint, type PathPoint, type Toolpath } from './toolpath';
+import { pointInPolygon, signedArea, type Vec2 } from './polyline';
+import { sliceAt } from './slicer';
 
 type V3 = [number, number, number];
 
@@ -371,9 +372,34 @@ function nearestOn(pts: V3[], q: V3): V3 {
  * a printed step when the next ring is within reach (one continuous bead), lifted travel if not.
  */
 export function buildRings(input: MeshData, s: PrintSettings, start: Vec2, spiral: boolean): Toolpath {
+  // The rings always go round the part. Where the horizontal sections are not complete loops yet
+  // (an open edge that is not flat, a part touching the table at a point) rings grown from there
+  // would fan out across the part: that bottom is printed in planar layers, and the rings start
+  // from the first layer that goes all the way round.
+  const planar = sliceForPrint(input, { ...s, mode: 'planar' });
+  // Judge the real sections (the planar layers below a complete loop are already turned into a
+  // base with the outline of the first full layer). A loop counts once the sections stay complete
+  // loops for the next ~10 mm: the tip of a part resting on a point is a tiny loop or an arc.
+  const zMin0 = computeBounds(input).min[2];
+  const raw = sliceAt(input, planar.layers.map((_, i) => zMin0 + (i + 0.5) * s.layerHeight));
+  const whole = (i: number) => raw[i].contours.length > 0 && raw[i].contours.every((c) => c.closed) && planar.layers[i].contours.length === raw[i].contours.length;
+  const span = Math.max(1, Math.ceil(10 / s.layerHeight));
+  const firstWhole = raw.findIndex((_, i) => {
+    for (let k = i; k < Math.min(raw.length, i + span); k++) if (!whole(k)) return false;
+    return true;
+  });
+  // Also wait for the real section to be as large as the base printed under it.
+  const area = (i: number) => planar.layers[i].contours.reduce((a, c) => a + Math.abs(signedArea(c.pts)), 0);
+  const rawArea = (i: number) => raw[i].contours.reduce((a, c) => a + (c.closed ? Math.abs(signedArea(c.pts)) : 0), 0);
+  let first = firstWhole;
+  while (first >= 0 && first < raw.length && rawArea(first) < 0.9 * area(first)) first++;
+  if (first >= raw.length) first = -1;
+  const zBase = first > 0 ? first * s.layerHeight : 0;
+  const zMin = computeBounds(input).min[2];
+  const upper = zBase > 0 ? translate(cutBelow(input, zMin + zBase), 0, 0, -zBase) : input;
   // Large faces (a flat lid made of two triangles) need points inside to carry the rings that
   // close them: split every edge longer than half a bead.
-  const mesh = refine(input, s.wallSpacing / 2);
+  const mesh = refine(upper, s.wallSpacing / 2);
   const phi = beadField(mesh, s);
   let top = 0;
   for (const f of phi) if (Number.isFinite(f)) top = Math.max(top, f);
@@ -392,11 +418,11 @@ export function buildRings(input: MeshData, s: PrintSettings, start: Vec2, spira
     const kept = rings.filter((r) => rings.length === 1 || ringLength(r) >= Math.min(main / 4, 2 * Math.PI * s.wallSpacing));
     if (kept.length) levels.push(kept);
   }
-  const single = levels.length > 1 && levels.every((l) => l.length === 1 && l[0].closed);
+  const single = first >= 0 && levels.length > 1 && levels.every((l) => l.length === 1 && l[0].closed);
   const tp: Toolpath = {
     points: [],
     mode: spiral && single ? 'spiral' : 'planar',
-    layerCount: levels.length,
+    layerCount: Math.max(0, first) + levels.length,
     layerHeight: s.layerHeight,
     layerStart: [],
     printLength: 0,
@@ -408,7 +434,7 @@ export function buildRings(input: MeshData, s: PrintSettings, start: Vec2, spira
   // The nozzle sits on the surface line lowered by half a bead less the first-layer squash,
   // never below the first-layer height.
   const dz = s.firstLayerZ - s.layerHeight / 2;
-  const at = (q: V3): V3 => [q[0], q[1], Math.max(s.firstLayerZ, q[2] + dz)];
+  const at = (q: V3): V3 => [q[0], q[1], Math.max(s.firstLayerZ, q[2] + dz) + zBase];
   const add = (q: V3, e: boolean) => {
     const last = tp.points[tp.points.length - 1];
     if (last) {
@@ -515,6 +541,19 @@ export function buildRings(input: MeshData, s: PrintSettings, start: Vec2, spira
   };
 
   let cur: V3 = [start[0], start[1], 0];
+  // Never a complete loop (an open strip): planar layers only. Otherwise the open bottom first.
+  if (first < 0) {
+    buildPlanar(tp, planar.layers, s, start);
+    tp.layerCount = planar.layers.length;
+    return tp;
+  }
+  if (first > 0) {
+    const end = buildPlanar(tp, planar.layers.slice(0, first), s, start);
+    cur = [end[0], end[1], tp.points[tp.points.length - 1]?.z ?? 0];
+    // The first ring may start over the last base layer: that layer carries the step to it.
+    const top = planar.layers[first - 1].contours.filter((c) => c.closed);
+    if (top.length) below = top.reduce((a, c) => (Math.abs(signedArea(c.pts)) > Math.abs(signedArea(a.pts)) ? c : a)).pts;
+  }
   levels.forEach((rings, li) => {
     tp.layerStart.push(tp.points.length);
     if (tp.mode === 'spiral') {
