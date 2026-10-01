@@ -15,7 +15,8 @@ The site is in **Italian and English**: the EN / IT button at the top right swit
 
 **Checks before export.** The *Download .src* button stays disabled:
 - while a computation is running or after any change, until the latest computation has finished (an outdated result can never be downloaded);
-- if a parameter is outside its admitted values (TOOL/BASE numbers, $VEL.CP, ANOUT outputs, safe position and homing pose within the axis limits, …);
+- if a parameter is outside its admitted values ($VEL.CP, ANOUT outputs, n° of layers, safe position and homing pose within the axis limits, …): parameters are checked *before* computing, so an excessive value does not even start it;
+- `BASE_DATA[1]`, `TOOL_DATA[11]` and E1–E4 = 0 are locked: they are the only configurations whose measurements the simulation and the reach check know;
 - if the robot cannot reach a toolpath point or an intermediate point of a LIN (sampled every 20 mm), or an axis exceeds the KR16 limits;
 - if a toolpath point goes below the work table (plate at Z 38 in BASE): this cannot be confirmed;
 - if a number field is empty or invalid;

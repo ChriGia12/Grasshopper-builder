@@ -4,6 +4,7 @@ import { sanitizeProgramName } from './core/kuka';
 import { IDENTITY, dropToOrigin, meshStats, mulMat3, rotX, rotY, rotZ, type Mat3, type MeshData } from './core/mesh';
 import type { OrientationCandidate } from './core/orientation';
 import { placementOffset } from './core/pipeline';
+import { FIXED_ROBOT, validateSettings } from './core/validate';
 import { KR16, linkTransforms, poseAt, robotRootFrame, type Joints, type ReachReport } from './core/robot';
 import { DEFAULT_PRINT, DEFAULT_ROBOT, type PrintSettings, type RobotSettings } from './core/settings';
 import type { Toolpath } from './core/toolpath';
@@ -35,6 +36,7 @@ const robot: RobotSettings = load('gb.robot', DEFAULT_ROBOT);
 // The cell is fixed (robot, table, controller frames): never take these from old saved settings.
 const CELL_KEYS = ['worldBaseX', 'worldBaseY', 'worldBaseZ', 'bedSizeX', 'bedSizeY', 'bedCenterX', 'bedCenterY', 'bedTopZ', 'baseData', 'toolData'] as const;
 for (const k of CELL_KEYS) (robot as unknown as Record<string, unknown>)[k] = structuredClone(DEFAULT_ROBOT[k]);
+Object.assign(robot, FIXED_ROBOT); // only BASE 1 / TOOL 11 without external axes are modelled
 try {
   if (localStorage.getItem('gb.cellVersion') !== '2') {
     robot.originZ = DEFAULT_ROBOT.originZ; // table top moved from a guess (37) to the measured plate (38)
@@ -212,6 +214,10 @@ function showModelInfo(m: MeshData) {
 async function analyze() {
   invalidate();
   if (!mesh) return;
+  if (!checkSettings()) {
+    for (const id of ['step-print', 'step-robot', 'step-out']) $(id).hidden = false;
+    return;
+  }
   const m = mesh;
   try {
     const res = await busy(t('busy.orient'), () =>
@@ -273,7 +279,17 @@ document.querySelectorAll<HTMLButtonElement>('[data-rot]').forEach((b) => {
 
 type Field =
   | { group: string }
-  | { key: string; label: string; kind: 'number' | 'text' | 'select' | 'check'; step?: number; min?: number; options?: [string, string][]; full?: boolean };
+  | {
+      key: string;
+      label: string;
+      kind: 'number' | 'text' | 'select' | 'check';
+      step?: number;
+      min?: number;
+      options?: [string, string][];
+      full?: boolean;
+      /** Shown but not editable (see FIXED_ROBOT). */
+      locked?: boolean;
+    };
 
 const PRINT_FIELDS: Field[] = [
   {
@@ -325,8 +341,8 @@ const PRINT_FIELDS: Field[] = [
 const ROBOT_FIELDS: Field[] = [
   { group: 'g.program' },
   { key: 'programName', label: 'f.programName', kind: 'text', full: true },
-  { key: 'toolNumber', label: 'TOOL_DATA[n]', kind: 'number', step: 1 },
-  { key: 'baseNumber', label: 'BASE_DATA[n]', kind: 'number', step: 1 },
+  { key: 'toolNumber', label: 'TOOL_DATA[n]', kind: 'number', step: 1, locked: true },
+  { key: 'baseNumber', label: 'BASE_DATA[n]', kind: 'number', step: 1, locked: true },
   { key: 'velCP', label: '$VEL.CP (m/s)', kind: 'number', step: 0.01 },
   { key: 'advance', label: '$ADVANCE', kind: 'number', step: 1 },
   { group: 'g.toolOrient' },
@@ -334,10 +350,10 @@ const ROBOT_FIELDS: Field[] = [
   { key: 'b', label: 'B (°)', kind: 'number', step: 1 },
   { key: 'c', label: 'C (°)', kind: 'number', step: 1 },
   { group: 'g.external' },
-  { key: 'e1', label: 'E1', kind: 'number', step: 1 },
-  { key: 'e2', label: 'E2', kind: 'number', step: 1 },
-  { key: 'e3', label: 'E3', kind: 'number', step: 1 },
-  { key: 'e4', label: 'E4', kind: 'number', step: 1 },
+  { key: 'e1', label: 'E1', kind: 'number', step: 1, locked: true },
+  { key: 'e2', label: 'E2', kind: 'number', step: 1, locked: true },
+  { key: 'e3', label: 'E3', kind: 'number', step: 1, locked: true },
+  { key: 'e4', label: 'E4', kind: 'number', step: 1, locked: true },
   { group: 'g.extruder' },
   { key: 'extruderAnout', label: 'f.extruderAnout', kind: 'number', step: 1 },
   { key: 'extruderSpeedAnout', label: 'f.extruderSpeedAnout', kind: 'number', step: 1 },
@@ -387,8 +403,11 @@ function setPath(obj: Record<string, unknown>, key: string, v: unknown) {
 const fieldErrors = new Set<string>();
 
 function renderFields(host: HTMLElement, fields: Field[], target: Record<string, unknown>, onChange: (key: string) => void) {
-  // Redrawn inputs show the real (valid) internal values again: their pending errors are gone.
-  for (const f of fields) if (!('group' in f)) fieldErrors.delete(f.key);
+  // Redrawn inputs show the real (valid) internal values again: their pending errors are gone,
+  // and the result must be recomputed for those values (the old one was discarded).
+  let cleared = false;
+  for (const f of fields) if (!('group' in f)) cleared = fieldErrors.delete(f.key) || cleared;
+  if (cleared && mesh) queueMicrotask(buildSoon);
   host.replaceChildren(
     ...fields.map((f) => {
       if ('group' in f) return Object.assign(document.createElement('div'), { className: 'group', textContent: t(f.group) });
@@ -406,6 +425,10 @@ function renderFields(host: HTMLElement, fields: Field[], target: Record<string,
         else input.value = String(val);
         input.step = 'any'; // free decimals; `f.step` only drives the spinner arrows below
         if (f.min !== undefined) input.min = String(f.min);
+        if (f.locked) {
+          input.disabled = true;
+          wrap.title = t('h.fixedCell');
+        }
         if (f.kind === 'number' && f.step !== undefined) {
           const step = f.step;
           input.addEventListener('keydown', (e) => {
@@ -516,7 +539,9 @@ let fitNext = true;
 
 async function build(): Promise<BuildMsg | null> {
   invalidate();
-  if (!mesh || !orientations.length) return null;
+  if (!mesh) return null;
+  if (!checkSettings()) return null;
+  if (!orientations.length) return (await analyze()) ?? null;
   const seq = buildSeq;
   const matrix = mulMat3(manual, orientations[orientIdx].matrix);
   const m = mesh;
@@ -742,12 +767,25 @@ function renderStats(r: BuildMsg) {
   updateExport();
 }
 
+/** Parameters outside their admitted values, found before computing: nothing was computed. */
+let settingsErrors: Msg[] = [];
+
+/** Checks the parameters before any computation; on errors they are listed and the export stays blocked. */
+function checkSettings(): boolean {
+  settingsErrors = validateSettings(print, robot);
+  if (settingsErrors.length) {
+    $('warnings').replaceChildren(...settingsErrors.map((w) => li(tm(w), 'blocked')));
+    updateExport();
+  }
+  return !settingsErrors.length;
+}
+
 /** Why the current result may not be exported (empty = export allowed). */
 function exportBlocks(): string[] {
   const r = lastBuild;
   if (!r || !lastSrc) return [];
   const out: string[] = [];
-  if (r.errors.length) out.push(t('out.blockedParams'));
+  if (r.errors.length) out.push(t('out.blockedErrors'));
   // A path the robot cannot follow must not reach the controller.
   if (r.reach.unreachable > 0 || r.reach.outOfLimits > 0) out.push(t('out.blocked'));
   if (r.offBed && !offBedOk.checked) out.push(t('out.blockedOffBed'));
@@ -766,6 +804,7 @@ function updateExport() {
   $('tiltRow').hidden = !(ready && tiltNeedsConfirm());
   if (lastBuild) $('tiltLabel').textContent = t('out.tiltConfirm', { n: lastBuild.meta.tiltX ?? 0 });
   const fields = [...fieldErrors].map((k) => li(t('v.field', { field: `f.${k.split('.')[0]}` }), 'blocked'));
+  if (settingsErrors.length) fields.push(li(t('out.blockedParams'), 'blocked'));
   $('exportState').replaceChildren(...fields, ...(ready ? blocks.map((b) => li(b, 'blocked')) : mesh && !fields.length ? [li(t('out.stale'))] : []));
 }
 
@@ -806,6 +845,7 @@ function applyLanguage() {
     setSimIndex(simIndex, true);
     updateLayerLabel();
   }
+  if (settingsErrors.length) $('warnings').replaceChildren(...settingsErrors.map((w) => li(tm(w), 'blocked')));
   $('playBtn').textContent = t(playing ? 'sim.pause' : 'sim.play');
   updateExport();
   if (pick !== 'none') $('pickHint').textContent = pick === 'place' ? t('pick.place') : t('pick.start');

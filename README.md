@@ -15,7 +15,8 @@ Il sito è in **italiano e inglese**: il pulsante EN / IT in alto a destra cambi
 
 **Controlli prima dell'esportazione.** Il pulsante *Scarica .src* resta disattivato:
 - mentre un calcolo è in corso o dopo qualsiasi modifica, finché l'ultimo calcolo non è finito (un risultato vecchio non è mai scaricabile);
-- se un parametro è fuori dai valori ammessi (numeri di TOOL/BASE, $VEL.CP, uscite ANOUT, posizione sicura e posa di homing entro i limiti degli assi, …);
+- se un parametro è fuori dai valori ammessi ($VEL.CP, uscite ANOUT, n° di strati, posizione sicura e posa di homing entro i limiti degli assi, …): i parametri sono controllati *prima* del calcolo, quindi un valore eccessivo non lo avvia nemmeno;
+- `BASE_DATA[1]`, `TOOL_DATA[11]` ed E1–E4 = 0 sono bloccati: sono le sole configurazioni di cui la simulazione e il controllo di raggiungibilità conoscono le misure;
 - se il robot non raggiunge un punto del percorso o un punto intermedio dei LIN (campionati ogni 20 mm), o se un asse supera i limiti del KR16;
 - se un punto del percorso scende sotto il piano di lavoro (lastra a Z 38 in BASE): non si può confermare;
 - se un campo numerico è vuoto o non valido;

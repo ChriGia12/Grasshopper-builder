@@ -1,5 +1,5 @@
 // End-to-end build used by the worker: orient → slice → toolpath → KUKA .src.
-import { msg, type Msg } from '../i18n';
+import { msg, SettingsError, type Msg } from '../i18n';
 import { validateSettings } from './validate';
 import { writeKukaSrc } from './kuka';
 import { applyMatrix, computeBounds, dropToOrigin, mulMat3, rotZ, type Mat3, type MeshData } from './mesh';
@@ -18,7 +18,7 @@ export interface BuildResult {
   min: [number, number, number];
   max: [number, number, number];
   reach: ReachReport;
-  /** Parameter errors (validateSettings): they block the export. */
+  /** Problems of the result that block the export (path below the plate). */
   errors: Msg[];
   /** The path leaves the work table: export needs an explicit confirmation. */
   offBed: boolean;
@@ -43,6 +43,10 @@ export function runBuild(
   robot: RobotSettings,
   sourceName: string,
 ): BuildResult {
+  // Parameters are checked before any geometry: an out-of-range value (e.g. thousands of passes)
+  // must not start a computation that could take minutes or exhaust memory.
+  const invalid = validateSettings(print, robot);
+  if (invalid.length) throw new SettingsError(invalid);
   const mesh = dropToOrigin(applyMatrix(original, mulMat3(rotZ(robot.rotationZ), matrix)));
   const offset = placementOffset(original, robot);
   const start: [number, number] | undefined =
@@ -60,7 +64,7 @@ export function runBuild(
       max[k] = Math.max(max[k], v[k]);
     }
   }
-  const errors = validateSettings(print, robot);
+  const errors: Msg[] = [];
   const bx0 = robot.bedCenterX - robot.bedSizeX / 2;
   const by0 = robot.bedCenterY - robot.bedSizeY / 2;
   const offBed = min[0] < bx0 || min[1] < by0 || max[0] > bx0 + robot.bedSizeX || max[1] > by0 + robot.bedSizeY;

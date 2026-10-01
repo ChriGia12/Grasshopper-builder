@@ -17,6 +17,13 @@ export class MsgError extends Error {
   }
 }
 
+/** Parameters outside their admitted values: the computation does not start. */
+export class SettingsError extends Error {
+  constructor(public errors: Msg[]) {
+    super(errors.map((e) => e.k).join(', '));
+  }
+}
+
 const IT: Record<string, string> = {
   // page
   'lang.toggle.title': 'Cambia lingua del sito',
@@ -214,7 +221,8 @@ const IT: Record<string, string> = {
   'w.tiltX': '{n} punti hanno una pendenza lungo X che C non può seguire (con A −180 / B 0 C inclina solo nel piano Y-Z): lì l’utensile non è normale alla superficie.',
   'w.coverage': 'Il percorso copre solo il {p}% della superficie superiore: controlla orientamento e pendenza max.',
   'out.offBedConfirm': 'Confermo: lavorazione intenzionalmente fuori dal piano di lavoro',
-  'out.blockedParams': 'Esportazione bloccata: alcuni parametri sono fuori dai valori ammessi.',
+  'out.blockedParams': 'Calcolo non eseguito: alcuni parametri sono fuori dai valori ammessi.',
+  'out.blockedErrors': 'Esportazione bloccata: correggi gli errori indicati nel risultato.',
   'out.blockedOffBed': 'Esportazione bloccata: il percorso esce dal piano. Spunta la conferma se è voluto.',
   'out.stale': 'Ricalcolo in corso…',
   'r.coverage': 'Copertura superficie',
@@ -224,6 +232,8 @@ const IT: Record<string, string> = {
   'approx.none': 'Nessuna: passa esattamente per ogni punto (si ferma a ogni LIN)',
   'v.belowTable': '{n} punti del percorso scendono sotto il piano di lavoro (Z {z} in BASE, minimo del percorso Z {min}): l’ugello entrerebbe nella lastra. Controlla “Quota pezzo Z in BASE”.',
   'v.field': '{field}: inserisci un numero valido.',
+  'v.fixed': '{field} è fisso a {fixed} (valore {v}): simulazione e controlli conoscono solo BASE_DATA[1], TOOL_DATA[11] ed E1–E4 = 0.',
+  'h.fixedCell': 'Bloccati: la simulazione e il controllo di raggiungibilità usano le misure di BASE 1 e TOOL 11, senza assi esterni.',
   'out.tiltConfirm': 'Confermo: in {n} punti l’utensile non sarà normale alla superficie (pendenza lungo X non seguibile con C)',
   'out.blockedTilt': 'Esportazione bloccata: l’inclinazione non può seguire la superficie in alcuni punti. Spunta la conferma oppure disattiva “inclina utensile”.',
   'v.range': '{field}: valore {v} fuori dall’intervallo ammesso {min} … {max}.',
@@ -424,7 +434,8 @@ const EN: Record<string, string> = {
   'w.tiltX': '{n} points have a slope along X that C cannot follow (with A −180 / B 0 C tilts only in the Y-Z plane): there the tool is not normal to the surface.',
   'w.coverage': 'The toolpath covers only {p}% of the top surface: check orientation and max slope.',
   'out.offBedConfirm': 'I confirm: printing intentionally outside the work table',
-  'out.blockedParams': 'Export blocked: some parameters are outside their admitted values.',
+  'out.blockedParams': 'Not computed: some parameters are outside their admitted values.',
+  'out.blockedErrors': 'Export blocked: fix the errors listed in the result.',
   'out.blockedOffBed': 'Export blocked: the toolpath leaves the table. Tick the confirmation if this is intended.',
   'out.stale': 'Recomputing…',
   'r.coverage': 'Surface coverage',
@@ -434,6 +445,8 @@ const EN: Record<string, string> = {
   'approx.none': 'None: passes exactly through every point (stops at every LIN)',
   'v.belowTable': '{n} toolpath points go below the work table (Z {z} in BASE, path minimum Z {min}): the nozzle would enter the plate. Check “Part Z in BASE”.',
   'v.field': '{field}: enter a valid number.',
+  'v.fixed': '{field} is fixed at {fixed} (value {v}): the simulation and checks know only BASE_DATA[1], TOOL_DATA[11] and E1–E4 = 0.',
+  'h.fixedCell': 'Locked: the simulation and the reach check use the measurements of BASE 1 and TOOL 11, without external axes.',
   'out.tiltConfirm': 'I confirm: at {n} points the tool will not be normal to the surface (slope along X cannot be followed with C)',
   'out.blockedTilt': 'Export blocked: the tilt cannot follow the surface at some points. Tick the confirmation or turn off “tilt tool”.',
   'v.range': '{field}: value {v} outside the admitted range {min} … {max}.',

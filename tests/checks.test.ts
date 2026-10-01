@@ -8,6 +8,7 @@ import { HeightField, topSurfacePasses } from '../src/core/surface';
 import { IDENTITY, weld, type Mat3 } from '../src/core/mesh';
 import { DEFAULT_PRINT, DEFAULT_ROBOT } from '../src/core/settings';
 import { box, cylinder } from './fixtures';
+import { SettingsError } from '../src/i18n';
 
 const I = [...IDENTITY] as Mat3;
 
@@ -19,13 +20,22 @@ describe('parameter validation', () => {
     const r = { ...DEFAULT_ROBOT, velCP: -1, toolNumber: -2, safeAxes: [999, -90, 90, 0, -1, 0] as typeof DEFAULT_ROBOT.safeAxes };
     const keys = validateSettings(DEFAULT_PRINT, r).map((m) => m.k + ':' + (m.p?.field ?? m.p?.axis));
     expect(keys).toContain('v.range:f.velCP');
-    expect(keys).toContain('v.rangeInt:f.toolNumber');
+    expect(keys).toContain('v.fixed:f.toolNumber');
     expect(keys).toContain('v.safe:A1');
     expect(keys).toContain('v.home:A1');
   });
-  it('carries the errors into the build result', () => {
-    const r = runBuild(weld(box(50, 50, 6)), I, DEFAULT_PRINT, { ...DEFAULT_ROBOT, velCP: -1 }, 't');
-    expect(r.errors.length).toBe(1);
+  it('locks BASE 1, TOOL 11 and E1–E4 = 0 (the only frames the simulation knows)', () => {
+    const keys = (r: Partial<typeof DEFAULT_ROBOT>) => validateSettings(DEFAULT_PRINT, { ...DEFAULT_ROBOT, ...r }).map((m) => m.k + ':' + m.p?.field);
+    expect(keys({ baseNumber: 2 })).toEqual(['v.fixed:f.baseNumber']);
+    expect(keys({ toolNumber: 12 })).toEqual(['v.fixed:f.toolNumber']);
+    expect(keys({ e3: 10 })).toEqual(['v.fixed:f.e3']);
+  });
+  it('rejects the parameters before generating anything', () => {
+    expect(() => runBuild(weld(box(50, 50, 6)), I, DEFAULT_PRINT, { ...DEFAULT_ROBOT, velCP: -1 }, 't')).toThrow(SettingsError);
+    // A huge layer count would run for minutes: it must fail at once.
+    const t0 = performance.now();
+    expect(() => runBuild(weld(box(50, 50, 6)), I, { ...DEFAULT_PRINT, mode: 'surface', surfacePasses: 1e6 }, DEFAULT_ROBOT, 't')).toThrow(SettingsError);
+    expect(performance.now() - t0).toBeLessThan(50);
   });
 });
 
