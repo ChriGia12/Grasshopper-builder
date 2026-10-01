@@ -105,6 +105,7 @@ All parameters are saved in the browser.
 npm install
 npm run dev      # http://localhost:5173
 npm test         # engine tests (slicing, toolpath, orientation, KUKA writer)
+npm run test:ui  # UI tests in a real browser (Playwright, Chromium)
 npm run build    # static site in dist/
 ```
 

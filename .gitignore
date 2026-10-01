@@ -3,3 +3,5 @@ dist
 .DS_Store
 *.log
 public/vendor
+test-results
+playwright-report
