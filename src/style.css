@@ -219,3 +219,5 @@ button.active { background: var(--accent); color: var(--accent-ink); border-colo
 .card h2 .chosen { margin-left: 8px; font-size: 12.5px; font-weight: 500; color: var(--muted); }
 details[open] .card h2 .chosen, details[open] summary .chosen { display: none; }
 .warnings li.blocked { background: color-mix(in srgb, var(--danger) 15%, transparent); color: var(--danger); font-weight: 600; }
+
+.field input.invalid { border-color: var(--danger); outline: 2px solid color-mix(in srgb, var(--danger) 40%, transparent); }

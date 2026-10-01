@@ -33,7 +33,7 @@ const print: PrintSettings = load('gb.print', DEFAULT_PRINT);
 if ((print.mode as string) === 'auto') print.mode = 'planar'; // old saved setting
 const robot: RobotSettings = load('gb.robot', DEFAULT_ROBOT);
 // The cell is fixed (robot, table, controller frames): never take these from old saved settings.
-const CELL_KEYS = ['worldBaseX', 'worldBaseY', 'worldBaseZ', 'bedSizeX', 'bedSizeY', 'bedCenterX', 'bedCenterY', 'baseData', 'toolData'] as const;
+const CELL_KEYS = ['worldBaseX', 'worldBaseY', 'worldBaseZ', 'bedSizeX', 'bedSizeY', 'bedCenterX', 'bedCenterY', 'bedTopZ', 'baseData', 'toolData'] as const;
 for (const k of CELL_KEYS) (robot as unknown as Record<string, unknown>)[k] = structuredClone(DEFAULT_ROBOT[k]);
 try {
   if (localStorage.getItem('gb.cellVersion') !== '2') {
@@ -55,6 +55,8 @@ const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as 
 const li = (text: string, className = '') => Object.assign(document.createElement('li'), { textContent: text, className });
 const escapeHtml = (s: string) => s.replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`);
 const viewer = new Viewer($('viewport'));
+const offBedOk = $<HTMLInputElement>('offBedOk');
+const tiltOk = $<HTMLInputElement>('tiltOk');
 
 // ---------- workers (restarted when a newer request supersedes a running one) ----------
 
@@ -148,7 +150,6 @@ function setNotes(notes: Msg[], error?: Msg | string) {
 
 async function openFile(file: File) {
   invalidate();
-  offBedOk.checked = false;
   const cell: CellRegion = {
     worldBase: [robot.worldBaseX, robot.worldBaseY, robot.worldBaseZ],
     bedCenter: [robot.bedCenterX, robot.bedCenterY],
@@ -382,7 +383,12 @@ function setPath(obj: Record<string, unknown>, key: string, v: unknown) {
   else (obj[k] as unknown[])[+i] = v;
 }
 
+/** Number fields currently holding no valid number: they block the export. */
+const fieldErrors = new Set<string>();
+
 function renderFields(host: HTMLElement, fields: Field[], target: Record<string, unknown>, onChange: (key: string) => void) {
+  // Redrawn inputs show the real (valid) internal values again: their pending errors are gone.
+  for (const f of fields) if (!('group' in f)) fieldErrors.delete(f.key);
   host.replaceChildren(
     ...fields.map((f) => {
       if ('group' in f) return Object.assign(document.createElement('div'), { className: 'group', textContent: t(f.group) });
@@ -417,7 +423,15 @@ function renderFields(host: HTMLElement, fields: Field[], target: Record<string,
         if (f.kind === 'check') v = (input as HTMLInputElement).checked;
         else if (f.kind === 'number') {
           const n = parseFloat(input.value);
-          if (!Number.isFinite(n)) return;
+          if (!Number.isFinite(n)) {
+            // An empty or invalid field must not leave an old program downloadable.
+            fieldErrors.add(f.key);
+            input.classList.add('invalid');
+            invalidate();
+            return;
+          }
+          fieldErrors.delete(f.key);
+          input.classList.remove('invalid');
           v = f.min !== undefined ? Math.max(f.min, n) : n;
         } else v = input.value;
         setPath(target, f.key, v);
@@ -439,6 +453,9 @@ let buildSeq = 0;
 function invalidate() {
   buildSeq++;
   lastSrc = '';
+  // A confirmation refers to one result: any change asks for it again.
+  offBedOk.checked = false;
+  tiltOk.checked = false;
   updateExport();
 }
 
@@ -734,19 +751,26 @@ function exportBlocks(): string[] {
   // A path the robot cannot follow must not reach the controller.
   if (r.reach.unreachable > 0 || r.reach.outOfLimits > 0) out.push(t('out.blocked'));
   if (r.offBed && !offBedOk.checked) out.push(t('out.blockedOffBed'));
+  if (tiltNeedsConfirm() && !tiltOk.checked) out.push(t('out.blockedTilt'));
   return out;
 }
 
+/** Tilt on, but some points have a slope along X that C cannot follow. */
+const tiltNeedsConfirm = () => !!lastBuild && print.surfaceTilt && (lastBuild.meta.tiltX ?? 0) > 0;
+
 function updateExport() {
-  const ready = !!lastSrc && !!lastBuild;
+  const ready = !!lastSrc && !!lastBuild && fieldErrors.size === 0;
   const blocks = exportBlocks();
   $<HTMLButtonElement>('download').disabled = !ready || blocks.length > 0;
   $('offBedRow').hidden = !(ready && lastBuild!.offBed);
-  $('exportState').replaceChildren(...(ready ? blocks.map((b) => li(b, 'blocked')) : mesh ? [li(t('out.stale'))] : []));
+  $('tiltRow').hidden = !(ready && tiltNeedsConfirm());
+  if (lastBuild) $('tiltLabel').textContent = t('out.tiltConfirm', { n: lastBuild.meta.tiltX ?? 0 });
+  const fields = [...fieldErrors].map((k) => li(t('v.field', { field: `f.${k.split('.')[0]}` }), 'blocked'));
+  $('exportState').replaceChildren(...fields, ...(ready ? blocks.map((b) => li(b, 'blocked')) : mesh && !fields.length ? [li(t('out.stale'))] : []));
 }
 
-const offBedOk = $<HTMLInputElement>('offBedOk');
 offBedOk.addEventListener('change', updateExport);
+tiltOk.addEventListener('change', updateExport);
 $('download').onclick = () => {
   if (!lastSrc || !lastBuild || exportBlocks().length) return;
   const a = document.createElement('a');

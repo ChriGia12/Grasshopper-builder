@@ -503,7 +503,7 @@ function buildSurface(mesh: MeshData, s: PrintSettings, start: Vec2): Toolpath {
       break;
     }
     cur = printSurfaceRuns(tp, runs, s.firstLayerZ + k * s.layerHeight, s, cur);
-    if (k === 0) [tp.coverage, tp.topArea] = surfaceCoverage(mesh, runs, s);
+    if (k === 0) [tp.coverage, tp.topArea] = surfaceCoverage(mesh, runs, s, hf);
   }
   if (tp.coverage !== undefined && tp.coverage < 0.8) tp.warnings.push(msg('w.coverage', { p: Math.round(tp.coverage * 100) }));
   return tp;
@@ -516,24 +516,45 @@ export function countTiltX(tp: Toolpath, n: [number, number, number]) {
 }
 
 /**
- * Share of the top surface (faces flatter than the max slope, projected on the table) covered by
- * the passes: each pass covers its plan length × one bead width.
+ * Real coverage of the top surface: a grid (≤ 2 mm cells) over the part; a cell belongs to the
+ * top surface when the surface above it is flatter than the max slope, and it is covered when
+ * its centre lies within half a bead of some pass. Overlaps count once and holes show up.
+ * Returns [covered share, top surface plan area in mm²].
  */
-function surfaceCoverage(mesh: MeshData, runs: SurfaceRun[], s: PrintSettings): [number, number] {
+export function surfaceCoverage(mesh: MeshData, runs: SurfaceRun[], s: PrintSettings, hf: HeightField): [number, number] {
+  const b = computeBounds(mesh);
+  const cell = Math.max(0.5, Math.min(2, s.wallSpacing / 3));
+  const nx = Math.ceil((b.max[0] - b.min[0]) / cell);
+  const ny = Math.ceil((b.max[1] - b.min[1]) / cell);
   const minNz = Math.cos((s.surfaceMaxSlope * Math.PI) / 180);
-  const p = mesh.positions;
-  const ix = mesh.indices;
-  let area = 0;
-  for (let t = 0; t < ix.length; t += 3) {
-    const a = ix[t] * 3, b = ix[t + 1] * 3, c = ix[t + 2] * 3;
-    const ux = p[b] - p[a], uy = p[b + 1] - p[a + 1], uz = p[b + 2] - p[a + 2];
-    const vx = p[c] - p[a], vy = p[c + 1] - p[a + 1], vz = p[c + 2] - p[a + 2];
-    const nz = ux * vy - uy * vx; // 2 × projected area, signed
-    const len = Math.hypot(uy * vz - uz * vy, uz * vx - ux * vz, nz);
-    if (len > 0 && nz / len >= minNz) area += nz / 2;
-  }
+  const top = new Uint8Array(nx * ny);
+  const hit = new Uint8Array(nx * ny);
+  let total = 0;
+  for (let j = 0; j < ny; j++)
+    for (let i = 0; i < nx; i++) {
+      const t = hf.top(b.min[0] + (i + 0.5) * cell, b.min[1] + (j + 0.5) * cell);
+      if (t && t.n[2] >= minNz) {
+        top[j * nx + i] = 1;
+        total++;
+      }
+    }
+  const r = s.wallSpacing / 2;
+  for (const run of runs)
+    for (let k = 1; k < run.pts.length; k++) {
+      const [ax, ay, bx, by] = [run.pts[k - 1].x, run.pts[k - 1].y, run.pts[k].x, run.pts[k].y];
+      const i0 = Math.max(0, Math.floor((Math.min(ax, bx) - r - b.min[0]) / cell));
+      const i1 = Math.min(nx - 1, Math.floor((Math.max(ax, bx) + r - b.min[0]) / cell));
+      const j0 = Math.max(0, Math.floor((Math.min(ay, by) - r - b.min[1]) / cell));
+      const j1 = Math.min(ny - 1, Math.floor((Math.max(ay, by) + r - b.min[1]) / cell));
+      const dx = bx - ax, dy = by - ay, l2 = dx * dx + dy * dy;
+      for (let j = j0; j <= j1; j++)
+        for (let i = i0; i <= i1; i++) {
+          const px = b.min[0] + (i + 0.5) * cell, py = b.min[1] + (j + 0.5) * cell;
+          const u = l2 > 0 ? Math.max(0, Math.min(1, ((px - ax) * dx + (py - ay) * dy) / l2)) : 0;
+          if (Math.hypot(px - ax - u * dx, py - ay - u * dy) <= r) hit[j * nx + i] = 1;
+        }
+    }
   let covered = 0;
-  for (const r of runs)
-    for (let i = 1; i < r.pts.length; i++) covered += Math.hypot(r.pts[i].x - r.pts[i - 1].x, r.pts[i].y - r.pts[i - 1].y) * s.wallSpacing;
-  return [area > 0 ? Math.min(1, covered / area) : 0, area];
+  for (let c = 0; c < top.length; c++) if (top[c] && hit[c]) covered++;
+  return [total ? covered / total : 0, total * cell * cell];
 }

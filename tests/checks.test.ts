@@ -3,7 +3,8 @@ import { validateSettings } from '../src/core/validate';
 import { runBuild } from '../src/core/pipeline';
 import { reachReport } from '../src/core/robot';
 import { writeKukaSrc } from '../src/core/kuka';
-import { buildToolpath } from '../src/core/toolpath';
+import { buildToolpath, surfaceCoverage } from '../src/core/toolpath';
+import { HeightField, topSurfacePasses } from '../src/core/surface';
 import { IDENTITY, weld, type Mat3 } from '../src/core/mesh';
 import { DEFAULT_PRINT, DEFAULT_ROBOT } from '../src/core/settings';
 import { box, cylinder } from './fixtures';
@@ -45,6 +46,31 @@ describe('table and reach checks', () => {
     const endsOnly = reachReport(ends, DEFAULT_ROBOT, undefined, 1e9);
     expect(endsOnly.unreachable).toBe(0);
     expect(withSamples.unreachable).toBeGreaterThan(0);
+  });
+});
+
+describe('work table height', () => {
+  it('blocks a toolpath that goes below the plate (originZ = 0 → Z 0.5 < 38)', () => {
+    const r = runBuild(weld(box(50, 50, 6)), I, DEFAULT_PRINT, { ...DEFAULT_ROBOT, originZ: 0 }, 't');
+    expect(r.errors.map((e) => e.k)).toContain('v.belowTable');
+  });
+  it('accepts the first pass 0.5 mm above the plate', () => {
+    const r = runBuild(weld(box(50, 50, 6)), I, DEFAULT_PRINT, DEFAULT_ROBOT, 't');
+    expect(r.errors).toEqual([]);
+  });
+});
+
+describe('surface coverage (union of the deposited beads)', () => {
+  it('is close to full on a flat top and sees the holes when passes are missing', () => {
+    const top = weld(box(120, 80, 20));
+    const s = { ...DEFAULT_PRINT, mode: 'surface' as const, wallSpacing: 6 };
+    const hf = new HeightField(top);
+    const runs = topSurfacePasses(top, { spacing: 6, angle: 0, maxSlope: 75, tolerance: 0.2, minLength: 10, inset: 3 }, hf);
+    const [full] = surfaceCoverage(top, runs, s, hf);
+    const [half] = surfaceCoverage(top, runs.filter((_, i) => i % 2 === 0), s, hf);
+    expect(full).toBeGreaterThan(0.9);
+    expect(half).toBeGreaterThan(0.4);
+    expect(half).toBeLessThan(0.6);
   });
 });
 

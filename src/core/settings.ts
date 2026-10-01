@@ -73,6 +73,8 @@ export interface RobotSettings {
   /** Centre of the work table in BASE (the table stays put while the part moves). */
   bedCenterX: number;
   bedCenterY: number;
+  /** Top of the work plate in BASE (mm): no toolpath point may go below it. */
+  bedTopZ: number;
   safeAxes: [number, number, number, number, number, number];
   /** Controller BASE_DATA[baseNumber] {X,Y,Z,A,B,C}, relative to the robot root. */
   baseData: [number, number, number, number, number, number];
@@ -137,6 +139,7 @@ export const DEFAULT_ROBOT: RobotSettings = {
   bedSizeY: 1350,
   bedCenterX: 0,
   bedCenterY: 450,
+  bedTopZ: 38,
   safeAxes: [0, -90, 90, 0, -1, 0],
   // Robot in the Rhino world at (0, −1000, 0) — centred on the table like the BASE, base
   // 32 mm below the top of the tavole. BASE (1448, −1000, 5) in world ⇒ (1448, 0, 5) from the robot.

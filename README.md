@@ -17,9 +17,11 @@ Il sito è in **italiano e inglese**: il pulsante EN / IT in alto a destra cambi
 - mentre un calcolo è in corso o dopo qualsiasi modifica, finché l'ultimo calcolo non è finito (un risultato vecchio non è mai scaricabile);
 - se un parametro è fuori dai valori ammessi (numeri di TOOL/BASE, $VEL.CP, uscite ANOUT, posizione sicura e posa di homing entro i limiti degli assi, …);
 - se il robot non raggiunge un punto del percorso o un punto intermedio dei LIN (campionati ogni 20 mm), o se un asse supera i limiti del KR16;
-- se il percorso esce dal piano di lavoro, a meno di una conferma esplicita.
+- se un punto del percorso scende sotto il piano di lavoro (lastra a Z 38 in BASE): non si può confermare;
+- se un campo numerico è vuoto o non valido;
+- se il percorso esce dal piano di lavoro in pianta, o se con *inclina utensile* ci sono punti con pendenza lungo X non seguibile: in questi due casi serve una conferma esplicita, che si azzera a ogni modifica.
 
-**Limiti.** Il sito non verifica le collisioni del braccio o del mandrino con tavola e pezzo, né il moto PTP verso le posizioni di sicurezza. Con `C_DIS` (default, come Tavolino1) il controller raccorda i LIN e non passa esattamente per ogni punto; l'opzione *Approssimazione LIN → Nessuna* fa fermare il robot su ogni punto. Prima della stampa il `.src` va comunque provato a vuoto o nella simulazione della cella reale.
+**Limiti.** Il sito non verifica le collisioni del braccio o del mandrino con tavola e pezzo, né il moto PTP verso le posizioni di sicurezza. Il controllo dei LIN intermedi verifica il percorso geometrico programmato, non la traiettoria raccordata che il controller esegue con `C_DIS` (default, come Tavolino1): con `C_DIS` il robot non passa esattamente per ogni punto; l'opzione *Approssimazione LIN → Nessuna* fa fermare il robot su ogni punto. Prima della stampa il `.src` va comunque provato a vuoto o nella simulazione della cella reale.
 
 ## Cella fissa
 
@@ -76,7 +78,7 @@ Le librerie rhino3dm e OpenCascade sono servite dal sito stesso (`public/vendor`
 | Contorno a strati | il contorno di ogni strato a Z costante, +altezza strato a ogni strato (come Tavolino1) |
 | Contorno a spirale | come sopra ma la Z sale lungo il giro (vase mode), senza giunzione |
 | Pieno a serpentina | il pezzo pieno con una serpentina continua (passata dopo passata, come un tosaerba), contorno esterno opzionale. Strati planari interi fino sotto il punto più basso della superficie superiore; poi, con *strati graduali*, N strati non planari che passano dal piano alla forma della superficie (strato k a quota taglio + (superficie − taglio)·k/N): ognuno copre tutta la sezione, cambia solo lo spessore (≈ ½–1½ altezza strato), l'ultimo è la superficie vera. Così non si formano isole e l'estrusore non si ferma (sella: 13 planari + 17 graduali, 0 stop). Direzione delle passate automatica (0/45/90/135°, meno interruzioni) |
-| Superficie superiore a serpentina | non planare: la serpentina segue la superficie superiore del pezzo (le facce più ripide di *pendenza max* sono fianchi e vengono escluse), mezzo cordolo dal bordo; più strati sovrapposti con *n° di strati*. Con *inclina utensile* il parametro C segue la pendenza nel piano Y-Z (C = 180° − arccos(Nz) per pendenze lungo Y, come nella calibrazione A −180 / B 0); la pendenza lungo X non è rappresentabile con il solo C e viene segnalata. Senza l'opzione l'utensile resta verticale. Il risultato indica la *copertura* della superficie superiore |
+| Superficie superiore a serpentina | non planare: la serpentina segue la superficie superiore del pezzo (le facce più ripide di *pendenza max* sono fianchi e vengono escluse), mezzo cordolo dal bordo; più strati sovrapposti con *n° di strati*. Con *inclina utensile* il parametro C segue la pendenza nel piano Y-Z (C = 180° − arccos(Nz) per pendenze lungo Y, come nella calibrazione A −180 / B 0); la pendenza lungo X non è rappresentabile con il solo C e viene segnalata. Senza l'opzione l'utensile resta verticale. Il risultato indica la *copertura*: quota della superficie superiore effettivamente coperta dall'unione delle fasce depositate (griglia ≤ 2 mm), quindi i buchi locali la fanno scendere |
 
 ## Posizione sul robot
 

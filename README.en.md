@@ -17,9 +17,11 @@ The site is in **Italian and English**: the EN / IT button at the top right swit
 - while a computation is running or after any change, until the latest computation has finished (an outdated result can never be downloaded);
 - if a parameter is outside its admitted values (TOOL/BASE numbers, $VEL.CP, ANOUT outputs, safe position and homing pose within the axis limits, …);
 - if the robot cannot reach a toolpath point or an intermediate point of a LIN (sampled every 20 mm), or an axis exceeds the KR16 limits;
-- if the toolpath leaves the work table, unless explicitly confirmed.
+- if a toolpath point goes below the work table (plate at Z 38 in BASE): this cannot be confirmed;
+- if a number field is empty or invalid;
+- if the toolpath leaves the work table in plan, or if with *tilt tool* some points have a slope along X that cannot be followed: these two cases need an explicit confirmation, reset at every change.
 
-**Limits.** The site does not check collisions of the arm or spindle with the table and the part, nor the PTP motion to the safe positions. With `C_DIS` (default, like Tavolino1) the controller blends the LIN moves and does not pass exactly through every point; the option *LIN approximation → None* makes the robot stop on every point. Before printing, the `.src` must still be run dry or in the simulation of the real cell.
+**Limits.** The site does not check collisions of the arm or spindle with the table and the part, nor the PTP motion to the safe positions. The check of the intermediate LIN points covers the programmed geometric path, not the blended trajectory the controller runs with `C_DIS` (default, like Tavolino1): with `C_DIS` the robot does not pass exactly through every point; the option *LIN approximation → None* makes the robot stop on every point. Before printing, the `.src` must still be run dry or in the simulation of the real cell.
 
 ## Fixed cell
 
@@ -76,7 +78,7 @@ The rhino3dm and OpenCascade libraries are served by the site itself (`public/ve
 | Contour layers | the contour of every layer at constant Z, +layer height at each layer (like Tavolino1) |
 | Contour spiral | as above but Z rises along the turn (vase mode), no seam |
 | Solid serpentine | the solid part with a continuous serpentine (pass after pass, like a lawn mower), optional outer contour. Whole planar layers up to below the lowest point of the top surface; then, with *blended layers*, N non-planar layers that go from flat to the shape of the surface (layer k at cut height + (surface − cut)·k/N): each covers the whole section, only its thickness changes (≈ ½–1½ layer heights), the last one is the real surface. No islands form and the extruder never stops (saddle: 13 planar + 17 blended, 0 stops). Automatic pass direction (0/45/90/135°, fewest breaks) |
-| Top surface serpentine | non-planar: the serpentine follows the top surface of the part (faces steeper than *max slope* are sides and are excluded), half a bead from the border; several stacked layers with *n° of layers*. With *tilt tool* the C parameter follows the slope in the Y-Z plane (C = 180° − arccos(Nz) for slopes along Y, as in the A −180 / B 0 calibration); a slope along X cannot be expressed with C alone and is reported. Without the option the tool stays vertical. The result shows the *coverage* of the top surface |
+| Top surface serpentine | non-planar: the serpentine follows the top surface of the part (faces steeper than *max slope* are sides and are excluded), half a bead from the border; several stacked layers with *n° of layers*. With *tilt tool* the C parameter follows the slope in the Y-Z plane (C = 180° − arccos(Nz) for slopes along Y, as in the A −180 / B 0 calibration); a slope along X cannot be expressed with C alone and is reported. Without the option the tool stays vertical. The result shows the *coverage*: the share of the top surface actually covered by the union of the deposited beads (≤ 2 mm grid), so local holes lower it |
 
 ## Position on the robot
 

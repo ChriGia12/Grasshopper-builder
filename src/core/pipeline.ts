@@ -65,7 +65,9 @@ export function runBuild(
   const by0 = robot.bedCenterY - robot.bedSizeY / 2;
   const offBed = min[0] < bx0 || min[1] < by0 || max[0] > bx0 + robot.bedSizeX || max[1] > by0 + robot.bedSizeY;
   if (offBed) toolpath.warnings.push(msg('w.offBed', { sx: robot.bedSizeX, sy: robot.bedSizeY, cx: robot.bedCenterX, cy: robot.bedCenterY }));
-  if (min[2] < 0) toolpath.warnings.push(msg('w.negativeZ'));
+  // The plate is fixed: a point below its top would drive the nozzle into it — never exportable.
+  const below = toolpath.points.filter((p) => p.z + offset[2] < robot.bedTopZ - 1e-6).length;
+  if (below) errors.push(msg('v.belowTable', { n: below, z: robot.bedTopZ, min: min[2].toFixed(1) }));
 
   const basePts = new Float64Array(toolpath.points.length * 3);
   toolpath.points.forEach((p, i) => basePts.set([p.x + offset[0], p.y + offset[1], p.z + offset[2]], i * 3));
