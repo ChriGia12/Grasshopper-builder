@@ -2,7 +2,7 @@
 import { msg, SettingsError, type Msg } from '../i18n';
 import { validateSettings } from './validate';
 import { writeKukaSrc } from './kuka';
-import { applyMatrix, computeBounds, dropToOrigin, mulMat3, rotZ, type Mat3, type MeshData } from './mesh';
+import { applyMatrix, computeBounds, cutBelow, dropToOrigin, mulMat3, openEdgeLift, rotZ, translate, type Mat3, type MeshData } from './mesh';
 import type { PrintSettings, RobotSettings } from './settings';
 import { reachReport, type ReachReport } from './robot';
 import { buildToolpath, sliceForPrint, type Toolpath } from './toolpath';
@@ -61,7 +61,9 @@ export function runBuild(
   // must not start a computation that could take minutes or exhaust memory.
   const invalid = validateSettings(print, robot);
   if (invalid.length) throw new SettingsError(invalid);
-  const mesh = dropToOrigin(applyMatrix(original, mulMat3(rotZ(robot.rotationZ), matrix)));
+  let mesh = dropToOrigin(applyMatrix(original, mulMat3(rotZ(robot.rotationZ), matrix)));
+  // Base cut: the part loses what is below the plane and rests on the cut (XY unchanged).
+  if (print.baseCut > 0) mesh = translate(cutBelow(mesh, print.baseCut), 0, 0, -print.baseCut);
   const offset = placementOffset(original, robot);
   const start: [number, number] | undefined =
     print.startMode === 'point' ? [print.startX - offset[0], print.startY - offset[1]] : undefined;
@@ -100,6 +102,9 @@ export function runBuild(
   if (reach.outOfLimits) toolpath.warnings.push(msg('w.limits', { n: reach.outOfLimits }));
   if (reach.jumps) toolpath.warnings.push(msg('w.jumps', { n: reach.jumps }));
   if (toolpath.tiltX) toolpath.warnings.push(msg('w.tiltX', { n: toolpath.tiltX }));
+  // An open edge (hull rim, bowl lip) that touches the table only in part: say where to cut.
+  const lift = openEdgeLift(mesh);
+  if (lift > 1) toolpath.warnings.push(msg('w.openEdgeLift', { z: Math.ceil(lift) }));
   // Same hard checks as the orientation ranking, on the orientation actually printed. The
   // surface mode prints on top of an existing part: its overhangs are not printed here.
   let support: BuildResult['support'] = null;

@@ -114,6 +114,104 @@ export function scale(m: MeshData, s: number): MeshData {
   return { positions: out, indices: m.indices };
 }
 
+/**
+ * Everything below z = zCut is cut away: triangles crossing the plane are clipped, and the new
+ * vertices on the plane are shared between neighbours, so the cut edge stays one clean loop.
+ */
+export function cutBelow(m: MeshData, zCut: number): MeshData {
+  const p = m.positions;
+  const ix = m.indices;
+  const nv = p.length / 3;
+  const pos: number[] = [];
+  const idx: number[] = [];
+  const kept = new Map<number, number>();
+  const onPlane = new Map<number, number>();
+  const above = (v: number) => p[v * 3 + 2] >= zCut;
+  const vert = (v: number) => {
+    let k = kept.get(v);
+    if (k === undefined) {
+      k = pos.length / 3;
+      kept.set(v, k);
+      pos.push(p[v * 3], p[v * 3 + 1], p[v * 3 + 2]);
+    }
+    return k;
+  };
+  const cross = (u: number, v: number) => {
+    const key = u < v ? u * nv + v : v * nv + u;
+    let k = onPlane.get(key);
+    if (k === undefined) {
+      const t = (zCut - p[u * 3 + 2]) / (p[v * 3 + 2] - p[u * 3 + 2]);
+      k = pos.length / 3;
+      onPlane.set(key, k);
+      pos.push(p[u * 3] + t * (p[v * 3] - p[u * 3]), p[u * 3 + 1] + t * (p[v * 3 + 1] - p[u * 3 + 1]), zCut);
+    }
+    return k;
+  };
+  for (let t = 0; t < ix.length; t += 3) {
+    const tri = [ix[t], ix[t + 1], ix[t + 2]];
+    const up = tri.map(above);
+    if (up.every((x) => !x)) continue;
+    if (up.every((x) => x)) {
+      idx.push(...tri.map(vert));
+      continue;
+    }
+    // Clip the triangle to the half-space above the plane (keeps the winding), then fan it.
+    const poly: number[] = [];
+    for (let k = 0; k < 3; k++) {
+      const [a, b] = [tri[k], tri[(k + 1) % 3]];
+      if (up[k]) poly.push(vert(a));
+      if (up[k] !== up[(k + 1) % 3]) poly.push(cross(a, b));
+    }
+    for (let k = 1; k + 1 < poly.length; k++) idx.push(poly[0], poly[k], poly[k + 1]);
+  }
+  return { positions: Float32Array.from(pos), indices: Uint32Array.from(idx) };
+}
+
+/**
+ * Open shells (a hull without deck, a bowl): the boundary loop that touches the table. Returns how
+ * high that loop rises above the lowest point — 0 when it lies flat on the table or there is none.
+ * Cutting the base at that height makes the whole edge rest on the table.
+ */
+export function openEdgeLift(m: MeshData): number {
+  const p = m.positions;
+  const ix = m.indices;
+  const nv = p.length / 3;
+  const count = new Map<number, number>();
+  for (let t = 0; t < ix.length; t += 3)
+    for (const [u, v] of [
+      [ix[t], ix[t + 1]],
+      [ix[t + 1], ix[t + 2]],
+      [ix[t + 2], ix[t]],
+    ]) {
+      const key = u < v ? u * nv + v : v * nv + u;
+      count.set(key, (count.get(key) ?? 0) + 1);
+    }
+  // Boundary edges → loops (union-find on their vertices).
+  const parent = new Map<number, number>();
+  const find = (v: number): number => {
+    let r = v;
+    while (parent.get(r) !== r) r = parent.get(r)!;
+    parent.set(v, r);
+    return r;
+  };
+  for (const [key, c] of count) {
+    if (c !== 1) continue;
+    const u = Math.floor(key / nv);
+    const v = key % nv;
+    for (const w of [u, v]) if (!parent.has(w)) parent.set(w, w);
+    parent.set(find(u), find(v));
+  }
+  if (!parent.size) return 0;
+  const zMin = computeBounds(m).min[2];
+  let low = -1;
+  for (const v of parent.keys()) if (low < 0 || p[v * 3 + 2] < p[low * 3 + 2]) low = v;
+  if (p[low * 3 + 2] > zMin + 0.5) return 0; // no open edge on the table
+  const loop = find(low);
+  let top = zMin;
+  for (const v of parent.keys()) if (find(v) === loop) top = Math.max(top, p[v * 3 + 2]);
+  return top - zMin;
+}
+
 /** Place the mesh with its bbox centered on the XY origin and resting on Z=0. */
 export function dropToOrigin(m: MeshData): MeshData {
   const b = computeBounds(m);

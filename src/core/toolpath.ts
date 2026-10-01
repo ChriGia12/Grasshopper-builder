@@ -8,6 +8,7 @@ import { cFromNormal, HeightField, topSurfacePasses, type SurfaceOptions, type S
 import { sliceAt, type Contour, type Layer } from './slicer';
 import { buildWalls, collapseThinWalls, islands, offsetContours } from './walls';
 import { scanFill, serpentine } from './zigzag';
+import { buildRings } from './rings';
 
 export interface PathPoint {
   x: number;
@@ -53,69 +54,15 @@ export interface LayerSummary {
   emptyLayers: number;
 }
 
-const FLAT = Math.sin((2 * Math.PI) / 180); // faces within 2° of horizontal
-
-/**
- * Layers as [bottom, thickness] from the table. Uniform: n layers of layerHeight. Adaptive
- * (contour layers only): where the surface is shallow the step in Z shrinks, so that consecutive
- * curves stay layerHeight apart along the surface: Δz = layerHeight · sin(slope), never below
- * minLayerHeight. The slope comes from the triangles crossing the layer (0.05 mm buckets).
- */
-export function layerStack(mesh: MeshData, s: PrintSettings): [number, number][] {
-  const b = computeBounds(mesh);
-  const height = b.max[2] - b.min[2];
-  const h = s.layerHeight;
-  if (!(s.adaptiveLayers && s.mode === 'planar')) {
-    const n = Math.max(1, Math.round(height / h));
-    return Array.from({ length: n }, (_, i) => [i * h, h]);
-  }
-  const step = 0.05;
-  const buckets = new Float32Array(Math.ceil(height / step) + 2).fill(1);
-  const p = mesh.positions;
-  const ix = mesh.indices;
-  for (let t = 0; t < ix.length; t += 3) {
-    const [a, c, d] = [ix[t] * 3, ix[t + 1] * 3, ix[t + 2] * 3];
-    const ux = p[c] - p[a], uy = p[c + 1] - p[a + 1], uz = p[c + 2] - p[a + 2];
-    const vx = p[d] - p[a], vy = p[d + 1] - p[a + 1], vz = p[d + 2] - p[a + 2];
-    const nx = uy * vz - uz * vy;
-    const ny = uz * vx - ux * vz;
-    const nz = ux * vy - uy * vx;
-    const len = Math.hypot(nx, ny, nz);
-    if (!len) continue;
-    const sin = Math.sqrt(Math.max(0, 1 - (nz / len) ** 2)); // slope of the face from horizontal
-    // Flat faces (bottom, lids, decks) are where a curve starts or ends, not a surface to follow.
-    if (sin < FLAT) continue;
-    const z0 = Math.min(p[a + 2], p[c + 2], p[d + 2]) - b.min[2];
-    const z1 = Math.max(p[a + 2], p[c + 2], p[d + 2]) - b.min[2];
-    for (let k = Math.floor(z0 / step); k <= Math.floor(z1 / step); k++) if (sin < buckets[k]) buckets[k] = sin;
-  }
-  const minSin = (from: number, to: number) => {
-    let m = 1;
-    for (let k = Math.floor(from / step); k <= Math.min(buckets.length - 1, Math.floor(to / step)); k++) m = Math.min(m, buckets[k]);
-    return m;
-  };
-  const lo = Math.min(s.minLayerHeight, h);
-  const out: [number, number][] = [];
-  for (let z = 0; z < height - lo / 2; ) {
-    let dz = h;
-    for (let k = 0; k < 3; k++) dz = Math.max(lo, Math.min(h, h * minSin(z, z + dz)));
-    out.push([z, dz]);
-    z += dz;
-  }
-  return out.length ? out : [[0, h]];
-}
-
-/**
- * Contour taken at mid-bead height; nozzle firstLayerZ above the bead bottom (scaled with the
- * bead thickness on adaptive layers). Uniform: cut at (i + ½)·h, nozzle at firstLayerZ + i·h.
- */
+/** Contour taken at mid-bead height (i + ½)·h; nozzle at firstLayerZ + i·h above the table. */
 export function sliceForPrint(mesh: MeshData, s: PrintSettings): LayerSummary {
   const b = computeBounds(mesh);
-  const stack = layerStack(mesh, s);
-  const zs = stack.map(([z, dz]) => b.min[2] + z + dz / 2);
+  const height = b.max[2] - b.min[2];
+  const n = Math.max(1, Math.round(height / s.layerHeight));
+  const zs = Array.from({ length: n }, (_, i) => b.min[2] + (i + 0.5) * s.layerHeight);
   const raw = sliceAt(mesh, zs);
   const layers = raw.map((l, i) => ({
-    z: stack[i][0] + (s.firstLayerZ * stack[i][1]) / s.layerHeight,
+    z: s.firstLayerZ + i * s.layerHeight,
     // A solid filled layer must keep its real outline: no shell → mid-line collapse there.
     contours: collapseThinWalls(l.contours, s.mode === 'zigzag' ? 0 : s.thinWallMax).filter(
       (c) => polylineLength(c.pts, c.closed) >= s.minContourLength,
@@ -192,6 +139,9 @@ export function buildToolpath(
 ): Toolpath {
   const b0 = computeBounds(mesh);
   if (s.mode === 'surface') return buildSurface(mesh, s, startTarget ?? [b0.min[0], b0.min[1]]);
+  // Contour layers / spiral following the surface: rings at a constant bead distance (rings.ts).
+  if (s.adaptiveLayers && (s.mode === 'planar' || s.mode === 'spiral'))
+    return buildRings(mesh, s, startTarget ?? [b0.min[0], b0.min[1]], s.mode === 'spiral');
   const summary = summaryIn ?? sliceForPrint(mesh, s);
   const mode = resolveMode(summary, s);
   const warnings: Msg[] = [];
@@ -261,6 +211,29 @@ function insideRegion(region: Contour[], s: PrintSettings): Inside {
 }
 
 /**
+ * `Inside` on the union of two regions: the layer being printed and the one below. The step from
+ * one layer to the next starts on the previous layer and ends on the new one — on a dome or a
+ * hull the new layer is smaller, so the step lies on the layer below, which carries it.
+ */
+function insideLayers(layer: Contour[], below: Contour[], s: PrintSettings): Inside {
+  let grown: Contour[][] | null = null;
+  const on = (q: Vec2, region: Contour[]) => {
+    let inside = false;
+    for (const c of region) if (c.closed && pointInPolygon(q, c.pts)) inside = !inside;
+    return inside;
+  };
+  return (a, b) => {
+    grown ??= [layer, below].filter((r) => r.length).map((r) => offsetContours(r, linkMargin(s)));
+    const n = Math.max(2, Math.ceil(Math.hypot(b[0] - a[0], b[1] - a[1])));
+    for (let k = 1; k < n; k++) {
+      const q: Vec2 = [a[0] + ((b[0] - a[0]) * k) / n, a[1] + ((b[1] - a[1]) * k) / n];
+      if (!grown.some((g) => on(q, g))) return false;
+    }
+    return true;
+  };
+}
+
+/**
  * A connection is extruded only when it is verified: short enough (`maxBridge`, or up to 8 beads
  * for the serpentine fill when `long`) and lying on material along its whole length. Anything
  * else becomes a lifted travel with the extruder off. The heuristics (fill direction, order)
@@ -308,10 +281,12 @@ function nearestIndex(contours: Contour[], cur: Vec2): number {
 
 function buildPlanar(tp: Toolpath, layers: Layer[], s: PrintSettings, start: Vec2): Vec2 {
   let cur: Vec2 = start;
+  let below: Contour[] = [];
   for (const layer of layers) {
     tp.layerStart.push(tp.points.length);
     const closed = layer.contours.filter((c) => c.closed);
-    const inside = insideRegion(closed, s);
+    const inside = insideLayers(closed, below, s);
+    if (closed.length) below = closed;
     for (const wall of buildWalls(closed, s.walls, s.wallSpacing)) {
       const pending = [...wall];
       while (pending.length) {
@@ -339,11 +314,13 @@ function buildPlanar(tp: Toolpath, layers: Layer[], s: PrintSettings, start: Vec
 function buildSpiral(tp: Toolpath, layers: Layer[], s: PrintSettings, start: Vec2): Vec2 {
   let cur: Vec2 = start;
   const h = s.layerHeight;
+  let below: Contour[] = [];
   layers.forEach((layer, li) => {
     tp.layerStart.push(tp.points.length);
     const loop = prepareLoop(layer.contours[0], s, cur);
     const ring = [...loop, loop[0]];
-    const inside = insideRegion(layer.contours, s);
+    const inside = insideLayers(layer.contours, below, s);
+    below = layer.contours;
     if (li === 0) {
       // Flat first layer for adhesion.
       moveTo(tp, loop[0], layer.z, s, undefined, inside);
