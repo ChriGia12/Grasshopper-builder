@@ -179,7 +179,11 @@ function loadOcct(): Promise<Any> {
 }
 
 async function parseCad(bytes: Uint8Array, ext: string): Promise<LoadedModel> {
-  const occt = await loadOcct();
+  return cadToModel(await loadOcct(), bytes, ext);
+}
+
+/** STEP / IGES / BREP through an OpenCascade instance (occt-import-js), 0.1 mm tessellation. */
+export function cadToModel(occt: Any, bytes: Uint8Array, ext: string): LoadedModel {
   const params = { linearUnit: 'millimeter', linearDeflectionType: 'absolute_value', linearDeflection: 0.1, angularDeflection: 0.2 };
   const res =
     ext === 'brep'

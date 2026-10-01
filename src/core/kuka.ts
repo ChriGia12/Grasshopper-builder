@@ -153,7 +153,10 @@ LIN ${frame(pts[0], r)}${approx}
       L.push(...extruderOn(r, 'RIACCENSIONE ESTRUSORE'));
       extruding = true;
     }
-    L.push(`LIN ${frame(p, r)}${approx}`);
+    // Between two parts the robot moves with a PTP above them (see parts.ts): the lift before
+    // it stops exactly (no C_DIS), so the arm is fully up before it swings across.
+    if (p.ptp) L.push(`PTP ${frame(p, r)}`);
+    else L.push(`LIN ${frame(p, r)}${pts[i + 1]?.ptp ? '' : approx}`);
   }
 
   h(`$VEL.CP=${r.velCP.toFixed(2)}

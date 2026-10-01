@@ -1,0 +1,88 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`reference part: sella.stp > chooses the same orientation 1`] = `
+[
+  "o.sideMinusY ok",
+  "o.sideMinusX ok",
+  "o.sidePlusX ok",
+  "o.upsideDown ok",
+]
+`;
+
+exports[`reference part: sella.stp > planar: same path, same checks, same .src 1`] = `
+{
+  "collisions": 0,
+  "errors": [],
+  "layers": 40,
+  "max": [
+    130,
+    640,
+    107,
+  ],
+  "min": [
+    -120,
+    390,
+    38.5,
+  ],
+  "outOfLimits": 0,
+  "points": 1081,
+  "printLength": 36508,
+  "ptp": 0,
+  "support": null,
+  "travels": 30,
+  "unreachable": 0,
+  "warnings": [],
+}
+`;
+
+exports[`reference part: sella.stp > surface: same path, same checks, same .src 1`] = `
+{
+  "collisions": 0,
+  "errors": [],
+  "layers": 1,
+  "max": [
+    126,
+    639,
+    98,
+  ],
+  "min": [
+    -117,
+    393,
+    71,
+  ],
+  "outOfLimits": 0,
+  "points": 607,
+  "printLength": 10536,
+  "ptp": 0,
+  "support": null,
+  "travels": 0,
+  "unreachable": 0,
+  "warnings": [],
+}
+`;
+
+exports[`reference part: sella.stp > zigzag: same path, same checks, same .src 1`] = `
+{
+  "collisions": 0,
+  "errors": [],
+  "layers": 30,
+  "max": [
+    130,
+    640,
+    96,
+  ],
+  "min": [
+    -120,
+    390,
+    38.5,
+  ],
+  "outOfLimits": 0,
+  "points": 8482,
+  "printLength": 334122,
+  "ptp": 0,
+  "support": null,
+  "travels": 0,
+  "unreachable": 0,
+  "warnings": [],
+}
+`;

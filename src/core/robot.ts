@@ -215,7 +215,14 @@ export interface ReachReport {
  * on long LIN moves, intermediate samples every `segStep` mm, since the controller moves the
  * TCP on the straight line between points.
  */
-export function reachReport(pointsBase: ArrayLike<number>, r: RobotSettings, cs?: ArrayLike<number>, segStep = 20): ReachReport {
+export function reachReport(
+  pointsBase: ArrayLike<number>,
+  r: RobotSettings,
+  cs?: ArrayLike<number>,
+  segStep = 20,
+  /** Points reached with a PTP: the TCP does not follow the straight line, no samples on it. */
+  ptp?: ArrayLike<number | boolean>,
+): ReachReport {
   const n = pointsBase.length / 3;
   const rep: ReachReport = {
     unreachable: 0,
@@ -252,7 +259,7 @@ export function reachReport(pointsBase: ArrayLike<number>, r: RobotSettings, cs?
   };
   for (let i = 0; i < n; i++) {
     const p: V3 = [pointsBase[i * 3], pointsBase[i * 3 + 1], pointsBase[i * 3 + 2]];
-    if (i > 0) {
+    if (i > 0 && !ptp?.[i]) {
       const a: V3 = [pointsBase[i * 3 - 3], pointsBase[i * 3 - 2], pointsBase[i * 3 - 1]];
       const steps = Math.ceil(Math.hypot(p[0] - a[0], p[1] - a[1], p[2] - a[2]) / segStep);
       const c0 = cs?.[i - 1];

@@ -7,6 +7,7 @@ import type { PrintSettings, RobotSettings } from './settings';
 import { reachReport, type ReachReport } from './robot';
 import { buildToolpath, sliceForPrint, type Toolpath } from './toolpath';
 import { riskZones, type Zones } from './zones';
+import { separateParts, type PartBox } from './parts';
 import { evaluateOrientation, OVERHANG_LIMIT, supportOk } from './orientation';
 import { collisionReport, type Body, type CollisionReport } from './collision';
 
@@ -53,6 +54,8 @@ export function runBuild(
   sourceName: string,
   /** Sampled arm and mandrino (collision.ts cellBodies); without them no collision check. */
   bodies?: Body[],
+  /** Several parts: their footprints in BASE, to move between them with a PTP. */
+  partBoxes?: PartBox[],
 ): BuildResult {
   // Parameters are checked before any geometry: an out-of-range value (e.g. thousands of passes)
   // must not start a computation that could take minutes or exhaust memory.
@@ -65,6 +68,7 @@ export function runBuild(
   const summary = print.mode === 'surface' ? undefined : sliceForPrint(mesh, print);
   const toolpath = buildToolpath(mesh, print, summary, start);
   const zones = riskZones(mesh, summary?.layers ?? null, print);
+  if (partBoxes) toolpath.partChanges = separateParts(toolpath, offset, partBoxes, print);
   const placed: RobotSettings = { ...robot, originX: offset[0], originY: offset[1], originZ: offset[2] };
   const src = writeKukaSrc(toolpath, placed, { sourceName, layerHeight: print.layerHeight });
 
@@ -89,7 +93,8 @@ export function runBuild(
   const basePts = new Float64Array(toolpath.points.length * 3);
   toolpath.points.forEach((p, i) => basePts.set([p.x + offset[0], p.y + offset[1], p.z + offset[2]], i * 3));
   const cs = Float64Array.from(toolpath.points, (p) => p.c ?? NaN);
-  const reach = reachReport(basePts, robot, cs);
+  const ptpAt = Uint8Array.from(toolpath.points, (p) => (p.ptp ? 1 : 0));
+  const reach = reachReport(basePts, robot, cs, 20, ptpAt);
   if (reach.unreachable)
     toolpath.warnings.push(msg('w.unreachable', { n: reach.unreachable }));
   if (reach.outOfLimits) toolpath.warnings.push(msg('w.limits', { n: reach.outOfLimits }));
@@ -110,7 +115,7 @@ export function runBuild(
   let collision: CollisionReport | null = null;
   if (bodies?.length) {
     const ext = Uint8Array.from(toolpath.points, (p) => (p.e ? 1 : 0));
-    collision = collisionReport(basePts, ext, reach.joints, bodies, robot, print, { first: reach.first, last: reach.last });
+    collision = collisionReport(basePts, ext, reach.joints, bodies, robot, print, { first: reach.first, last: reach.last }, 3, ptpAt);
     if (collision.count)
       errors.push(msg('v.collision', { n: collision.count, lin: collision.first + 1, what: `c.${collision.what}`, body: collision.body }));
     for (const c of collision.ptp) errors.push(msg('v.ptpCollision', { move: `c.move.${c.move}`, what: `c.${c.what}`, body: c.body }));

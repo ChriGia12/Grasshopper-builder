@@ -17,6 +17,8 @@ export interface PathPoint {
   e: boolean;
   /** tool tilt C for this point (surface mode with tilt); otherwise the robot setting */
   c?: number;
+  /** reached with a PTP (move between two parts, above them) instead of a LIN */
+  ptp?: boolean;
 }
 
 export interface Toolpath {
@@ -37,6 +39,8 @@ export interface Toolpath {
   topArea?: number;
   /** Tilt on: points whose slope along X cannot be followed with C (> 5°). */
   tiltX?: number;
+  /** Several parts: moves from one part to the next (PTP above the parts, extruder off). */
+  partChanges?: number;
 }
 
 export interface LayerSummary {

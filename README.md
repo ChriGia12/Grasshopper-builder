@@ -56,6 +56,8 @@ Il robot sta nel mondo Rhino a (0, −1000, 0): il punto disegnato in `BASE ROBO
 4. **Punto iniziale**: clicca vicino al contorno dove vuoi che parta la stampa (punto azzurro).
 5. **Scarica .src**. **Scheda PDF** apre una scheda riassuntiva (immagine, pezzi, esito di tutti i controlli, risultato, impostazioni) da stampare o salvare in PDF.
 
+**Cambio pezzo.** Con più pezzi, quando il percorso passa da un pezzo all'altro il sito spegne l'estrusore, sale in verticale con un LIN senza raccordo fino a 30 mm sopra quanto già stampato, si sposta sopra il pezzo successivo con un `PTP` e scende con un LIN dove la stampa riprende (estrusore riacceso). Anche questi PTP passano dal controllo collisioni, con l'interpolazione degli assi del controller.
+
 **Progetti.** *Salva progetto* scarica un file `.kinepath` con i file originali dei pezzi, il loro orientamento e la posizione e tutte le impostazioni; *Apri progetto* (o trascinare il file sulla zona di caricamento) riporta il sito esattamente a quello stato.
 
 ## Formati supportati
@@ -107,6 +109,12 @@ npm run dev      # http://localhost:5173
 npm test         # test del motore (slicing, percorso, orientamento, writer KUKA)
 npm run test:ui  # test dell'interfaccia in un browser vero (Playwright, Chromium)
 npm run build    # sito statico in dist/
+```
+
+**Pezzo campione.** `tests/data/sella.stp` attraversa tutta la catena (import STEP, orientamento, percorso nei tre modi, controlli, `.src`) e il risultato viene confrontato con quello salvato in `tests/golden/`. Se una modifica cambia anche una sola riga del `.src` il test fallisce; quando il cambiamento è voluto, i riferimenti si rigenerano con:
+
+```bash
+npx vitest run -u
 ```
 
 Test opzionale su un file Rhino reale:

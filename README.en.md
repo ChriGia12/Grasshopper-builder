@@ -56,6 +56,8 @@ The robot stands in the Rhino world at (0, −1000, 0): the point drawn in `BASE
 4. **Start point**: click near the contour where printing should start (light blue dot).
 5. **Download .src**. **PDF sheet** opens a summary sheet (image, parts, outcome of every check, result, settings) to print or save as PDF.
 
+**Change of part.** With several parts, when the path goes from one part to the next the site switches the extruder off, goes straight up with a LIN without blending to 30 mm above what is already printed, moves above the next part with a `PTP` and goes down with a LIN where printing resumes (extruder on again). These PTPs go through the collision check as well, with the controller's axis interpolation.
+
 **Projects.** *Save project* downloads a `.kinepath` file with the original files of the parts, their orientation and position and all the settings; *Open project* (or dropping the file on the upload area) brings the site back to exactly that state.
 
 ## Supported formats
@@ -107,6 +109,12 @@ npm run dev      # http://localhost:5173
 npm test         # engine tests (slicing, toolpath, orientation, KUKA writer)
 npm run test:ui  # UI tests in a real browser (Playwright, Chromium)
 npm run build    # static site in dist/
+```
+
+**Reference part.** `tests/data/sella.stp` goes through the whole chain (STEP import, orientation, toolpath in the three modes, checks, `.src`) and the result is compared with the one saved in `tests/golden/`. If a change alters even one line of the `.src` the test fails; when the change is intended, the references are regenerated with:
+
+```bash
+npx vitest run -u
 ```
 
 Optional test on a real Rhino file:

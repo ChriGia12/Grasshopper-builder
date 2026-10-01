@@ -145,8 +145,8 @@ export interface CollisionReport {
   body: string;
   /** Up to 500 colliding path indices, for the viewer. */
   points: number[];
-  /** PTP moves (start, end, homing) that hit something: move name, what, body. */
-  ptp: { move: 'start' | 'end' | 'home'; what: 'plate' | 'part'; body: string }[];
+  /** PTP moves (start, end, homing, change of part) that hit something: move name, what, body. */
+  ptp: { move: 'start' | 'end' | 'home' | 'change'; what: 'plate' | 'part'; body: string }[];
 }
 
 /**
@@ -163,6 +163,8 @@ export function collisionReport(
   s: Pick<PrintSettings, 'layerHeight' | 'firstLayerZ' | 'wallSpacing'>,
   ends: { first: Joints | null; last: Joints | null },
   step = 3,
+  /** Points reached with a PTP (change of part): the arm moves in joint space to them. */
+  ptpAt?: ArrayLike<number | boolean>,
 ): CollisionReport {
   const rep: CollisionReport = { count: 0, first: -1, what: null, body: '', points: [], ptp: [] };
   const obs = new Obstacles(r, bodies);
@@ -170,7 +172,7 @@ export function collisionReport(
   const at = (i: number): V3 => [pts[i * 3], pts[i * 3 + 1], pts[i * 3 + 2]];
   let checkedAt: V3 | null = null;
 
-  const ptp = (move: 'start' | 'end' | 'home', a: Joints, b: Joints, part: boolean) => {
+  const ptp = (move: 'start' | 'end' | 'home' | 'change', a: Joints, b: Joints, part: boolean) => {
     const steps = Math.max(2, Math.ceil(Math.max(...a.map((v, k) => Math.abs(b[k] - v))) / 2)); // every 2° of the largest axis
     for (let k = 1; k < steps; k++) {
       const q = a.map((v, j) => v + ((b[j] - v) * k) / steps) as Joints;
@@ -189,6 +191,10 @@ export function collisionReport(
     if (i > 0 && ext[i]) obs.addBead(at(i - 1), p, s);
     const q = Array.from(joints.subarray(i * 6, i * 6 + 6)) as Joints;
     if (!Number.isFinite(q[0])) continue; // unreachable: reported by reachReport
+    if (ptpAt?.[i] && i > 0) {
+      const q0 = Array.from(joints.subarray(i * 6 - 6, i * 6)) as Joints;
+      if (Number.isFinite(q0[0]) && rep.ptp.filter((c) => c.move === 'change').length < 3) ptp('change', q0, q, true);
+    }
     if (checkedAt && i < n - 1 && Math.hypot(p[0] - checkedAt[0], p[1] - checkedAt[1], p[2] - checkedAt[2]) < step) continue;
     checkedAt = p;
     const h = obs.hit(q, true);

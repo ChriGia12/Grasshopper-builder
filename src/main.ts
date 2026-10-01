@@ -10,6 +10,7 @@ import { DEFAULT_PRINT, DEFAULT_ROBOT, type PrintSettings, type RobotSettings } 
 import type { Toolpath } from './core/toolpath';
 import { cellBodies, type Body, type CollisionReport } from './core/collision';
 import type { Zones } from './core/zones';
+import type { PartBox } from './core/parts';
 import { Viewer } from './viewer';
 import { applyStatic, getLang, locale, msg, MsgError, setLang, t, tm, type Msg } from './i18n';
 import type { WorkerRequest } from './worker';
@@ -757,6 +758,7 @@ interface BuildMsg {
   xyz: Float32Array;
   ext: Uint8Array;
   cc: Float32Array;
+  ptp: Uint8Array;
   meta: Toolpath;
   src: string;
   offset: [number, number, number];
@@ -776,13 +778,13 @@ interface BuildMsg {
  * Several parts: each one oriented, turned and placed in BASE, merged into one mesh that is
  * printed layer by layer (the computation re-centres it on its own centre).
  */
-function assembly(): { mesh: MeshData; matrix: Mat3; robot: RobotSettings; name: string; notes: Msg[] } {
+function assembly(): { mesh: MeshData; matrix: Mat3; robot: RobotSettings; name: string; notes: Msg[]; boxes?: PartBox[] } {
   const name = parts.map((p) => p.name).join(' + ');
   if (parts.length === 1) {
     const p = parts[0];
     return { mesh: p.mesh, matrix: orientedMatrix(p), robot: structuredClone({ ...robot, originX: p.x, originY: p.y, rotationZ: p.rotZ }), name, notes: [] };
   }
-  const boxes: [number, number, number, number][] = [];
+  const boxes: PartBox[] = [];
   const placed = parts.map((p) => {
     const m = dropToOrigin(applyMatrix(p.mesh, mulMat3(rotZ(p.rotZ), orientedMatrix(p))));
     const [x, y] = robot.placement === 'file' ? placementOffset(p.mesh, robot) : [p.x, p.y];
@@ -799,7 +801,7 @@ function assembly(): { mesh: MeshData; matrix: Mat3; robot: RobotSettings; name:
   const all = mergeMeshes(placed);
   const b = computeBounds(all);
   const r = { ...robot, placement: 'origin' as const, originX: (b.min[0] + b.max[0]) / 2, originY: (b.min[1] + b.max[1]) / 2, rotationZ: 0 };
-  return { mesh: all, matrix: [...IDENTITY] as Mat3, robot: structuredClone(r), name, notes };
+  return { mesh: all, matrix: [...IDENTITY] as Mat3, robot: structuredClone(r), name, notes, boxes };
 }
 /** Warnings about the arrangement of the parts (overlaps), shown with the result. */
 let assemblyNotes: Msg[] = [];
@@ -820,7 +822,7 @@ async function build(): Promise<BuildMsg | null> {
   let r: BuildMsg;
   try {
     r = await busy(t('busy.path'), () =>
-      run<BuildMsg>('build', { type: 'build', mesh: job.mesh, matrix: job.matrix, print: { ...print }, robot: job.robot, sourceName: job.name, bodies }),
+      run<BuildMsg>('build', { type: 'build', mesh: job.mesh, matrix: job.matrix, print: { ...print }, robot: job.robot, sourceName: job.name, bodies, partBoxes: job.boxes }),
     );
   } catch (e) {
     if (!(e instanceof Superseded) && seq === buildSeq) $('warnings').replaceChildren(li(tm(errText(e))));
@@ -914,9 +916,9 @@ function setSimIndex(i: number, keepPos = false) {
   const q = poseAt(p, Number.isFinite(cPt) ? { ...robot, c } : robot, robotPose);
   if (q) showRobot(q);
   const f = (v: number) => v.toFixed(1);
-  const move = r.ext[simIndex] ? t('sim.print') : t('sim.travel');
+  const move = r.ext[simIndex] ? t('sim.print') : r.ptp[simIndex] ? t('sim.partChange') : t('sim.travel');
   $('simReadout').innerHTML =
-    `LIN ${simIndex + 1} / ${n} · ${move}\nX ${f(p[0])}  Y ${f(p[1])}  Z ${f(p[2])}  A ${robot.a}  B ${robot.b}  C ${f(c)}\n` +
+    `${r.ptp[simIndex] ? 'PTP' : 'LIN'} ${simIndex + 1} / ${n} · ${move}\nX ${f(p[0])}  Y ${f(p[1])}  Z ${f(p[2])}  A ${robot.a}  B ${robot.b}  C ${f(c)}\n` +
     (q ? q.map((v, k) => `A${k + 1} ${v.toFixed(1)}°`).join('  ') : `<span class="bad">${escapeHtml(t('sim.unreachable'))}</span>`);
 }
 
@@ -1015,7 +1017,7 @@ function statsItems(r: BuildMsg): [string, string, boolean?][] {
   const tp = r.meta;
   const seconds = (tp.printLength + tp.travelLength) / (robot.velCP * 1000) + tp.travels * robot.extruderDelay;
   const kb = new Blob([r.src]).size / 1024;
-  const stops = ' ' + (tp.travels ? t('r.stops', { n: tp.travels }) : t('r.noStops'));
+  const stops = ' ' + (tp.travels ? t('r.stops', { n: tp.travels }) : t('r.noStops')) + (tp.partChanges ? ' ' + t('r.partChanges', { n: tp.partChanges }) : '');
   const items: [string, string, boolean?][] = [
     [t('r.mode'), t(`r.mode.${tp.mode}`) + stops, true],
     [t('r.layers'), `${tp.layerCount}`],
