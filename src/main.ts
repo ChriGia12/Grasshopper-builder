@@ -185,7 +185,7 @@ async function openFile(file: File) {
   viewer.setToolpath(null, null, [], [0, 0, 0]);
   const off = placementOffset(mesh, robot);
   viewer.setModel(dropToOrigin(mesh), off, 1);
-  viewer.setBed(robot.bedSizeX, robot.bedSizeY, [robot.bedCenterX, robot.bedCenterY, off[2]]);
+  viewer.setBed(robot.bedSizeX, robot.bedSizeY, [robot.bedCenterX, robot.bedCenterY, robot.bedTopZ]);
   viewer.fit();
   await analyze();
 }
@@ -534,7 +534,7 @@ async function build(): Promise<BuildMsg | null> {
   currentMeta = r.meta;
   lastBuild = r;
   viewer.setModel(r.mesh, r.offset, parseFloat($<HTMLInputElement>('opacity').value));
-  viewer.setBed(robot.bedSizeX, robot.bedSizeY, [robot.bedCenterX, robot.bedCenterY, r.offset[2]]);
+  viewer.setBed(robot.bedSizeX, robot.bedSizeY, [robot.bedCenterX, robot.bedCenterY, robot.bedTopZ]);
   viewer.setToolpath(r.xyz, r.ext, r.meta.layerStart, r.offset);
   viewer.setStartMarker(r.xyz.length ? [r.xyz[0] + r.offset[0], r.xyz[1] + r.offset[1], r.xyz[2] + r.offset[2]] : null);
   const slider = $<HTMLInputElement>('layerSlider');

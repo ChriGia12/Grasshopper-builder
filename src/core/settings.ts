@@ -133,7 +133,7 @@ export const DEFAULT_ROBOT: RobotSettings = {
   worldBaseZ: 5,
   originX: 5,
   originY: 515,
-  originZ: 38, // top of the work plate (lastra) in BASE
+  originZ: 38, // Z of the part base in BASE (on the plate by default); the plate itself is bedTopZ
   rotationZ: 0,
   bedSizeX: 640,
   bedSizeY: 1350,
