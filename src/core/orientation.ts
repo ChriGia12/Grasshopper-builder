@@ -21,8 +21,17 @@ export interface OrientationCandidate {
   maxIslands: number; // max separate outer contours in one layer
   singleLoop: boolean; // ≥ 90% of sampled layers are one closed contour → spiral possible
   score: number; // lower is better
+  /** Passes the hard checks (no unsupported islands, overhangs within OVERHANG_LIMIT). */
+  valid: boolean;
   notes: Msg[];
 }
+
+/** Share of the surface that may overhang beyond the critical angle before support is needed. */
+export const OVERHANG_LIMIT = 0.02;
+
+/** Hard checks on an orientation: the score only ranks the ones that pass them. */
+export const supportOk = (e: { unsupported: number; overhangArea: number; totalArea: number }) =>
+  e.unsupported === 0 && (e.totalArea ? e.overhangArea / e.totalArea : 0) <= OVERHANG_LIMIT;
 
 const AXES: { label: Msg; down: [number, number, number] }[] = [
   { label: msg('o.asImported'), down: [0, 0, -1] },
@@ -139,7 +148,9 @@ export function analyzeOrientations(mesh: MeshData, overhangDeg: number, layerHe
       const baseRatio = e.baseArea / maxBase;
       const notes: Msg[] = [];
       if (e.unsupported) notes.push(msg('o.note.unsupported', { n: e.unsupported }));
-      if (overhangRatio > 0.02) notes.push(msg('o.note.overhang', { p: (overhangRatio * 100).toFixed(1) }));
+      const valid = supportOk(e);
+      if (!valid) notes.unshift(msg('o.note.invalid'));
+      if (overhangRatio > OVERHANG_LIMIT) notes.push(msg('o.note.overhang', { p: (overhangRatio * 100).toFixed(1) }));
       if (e.maxIslands > 1) notes.push(msg('o.note.islands', { n: e.maxIslands }));
       if (e.singleLoop) notes.push(msg('o.note.single'));
       if (baseRatio < 0.05) notes.push(msg('o.note.smallBase'));
@@ -162,8 +173,10 @@ export function analyzeOrientations(mesh: MeshData, overhangDeg: number, layerHe
         maxIslands: e.maxIslands,
         singleLoop: e.singleLoop,
         score,
+        valid,
         notes,
       };
     })
-    .sort((a, b) => a.score - b.score);
+    // Valid orientations first, ranked by score; the others only after them.
+    .sort((a, b) => Number(b.valid) - Number(a.valid) || a.score - b.score);
 }

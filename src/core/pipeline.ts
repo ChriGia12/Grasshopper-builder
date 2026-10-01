@@ -6,6 +6,7 @@ import { applyMatrix, computeBounds, dropToOrigin, mulMat3, rotZ, type Mat3, typ
 import type { PrintSettings, RobotSettings } from './settings';
 import { reachReport, type ReachReport } from './robot';
 import { buildToolpath, type Toolpath } from './toolpath';
+import { evaluateOrientation, OVERHANG_LIMIT, supportOk } from './orientation';
 
 export interface BuildResult {
   toolpath: Toolpath;
@@ -22,6 +23,8 @@ export interface BuildResult {
   errors: Msg[];
   /** The path leaves the work table: export needs an explicit confirmation. */
   offBed: boolean;
+  /** Overhangs or islands that need support in this orientation: export needs a confirmation. */
+  support: { islands: number; overhang: number } | null;
 }
 
 /** Where the local part frame lands in BASE coordinates. */
@@ -82,5 +85,16 @@ export function runBuild(
   if (reach.outOfLimits) toolpath.warnings.push(msg('w.limits', { n: reach.outOfLimits }));
   if (reach.jumps) toolpath.warnings.push(msg('w.jumps', { n: reach.jumps }));
   if (toolpath.tiltX) toolpath.warnings.push(msg('w.tiltX', { n: toolpath.tiltX }));
-  return { toolpath, src, offset, mesh, min, max, reach, errors, offBed };
+  // Same hard checks as the orientation ranking, on the orientation actually printed. The
+  // surface mode prints on top of an existing part: its overhangs are not printed here.
+  let support: BuildResult['support'] = null;
+  if (toolpath.mode !== 'surface') {
+    const e = evaluateOrientation(mesh, [0, 0, -1], print.overhangAngle, print.layerHeight, print.thinWallMax);
+    if (!supportOk(e)) {
+      const overhang = e.totalArea ? (e.overhangArea / e.totalArea) * 100 : 0;
+      support = { islands: e.unsupported, overhang: +overhang.toFixed(1) };
+      toolpath.warnings.push(msg('w.support', { n: e.unsupported, p: support.overhang, lim: OVERHANG_LIMIT * 100, a: print.overhangAngle }));
+    }
+  }
+  return { toolpath, src, offset, mesh, min, max, reach, errors, offBed, support };
 }

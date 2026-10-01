@@ -20,7 +20,7 @@ The site is in **Italian and English**: the EN / IT button at the top right swit
 - if the robot cannot reach a toolpath point or an intermediate point of a LIN (sampled every 20 mm), or an axis exceeds the KR16 limits;
 - if a toolpath point goes below the work table (plate at Z 38 in BASE): this cannot be confirmed;
 - if a number field is empty or invalid;
-- if the toolpath leaves the work table in plan, or if with *tilt tool* some points have a slope along X that cannot be followed: these two cases need an explicit confirmation, reset at every change.
+- if the toolpath leaves the work table in plan, if with *tilt tool* some points have a slope along X that cannot be followed, or if in the chosen orientation the part has islands starting in mid-air or more than 2% of its surface overhanging beyond the critical angle: these cases need an explicit confirmation, reset at every change.
 
 **Limits.** The site does not check collisions of the arm or spindle with the table and the part, nor the PTP motion to the safe positions. The check of the intermediate LIN points covers the programmed geometric path, not the blended trajectory the controller runs with `C_DIS` (default, like Tavolino1): with `C_DIS` the robot does not pass exactly through every point; the option *LIN approximation → None* makes the robot stop on every point. Before printing, the `.src` must still be run dry or in the simulation of the real cell.
 
@@ -67,8 +67,9 @@ The rhino3dm and OpenCascade libraries are served by the site itself (`public/ve
 ## How it works
 
 - **Exact slicing**: every layer is the intersection of a plane with the mesh; segments are chained through the mesh topology (shared edges), so contours are closed and follow the real geometry. Douglas–Peucker simplification with adjustable tolerance (default 0.2 mm), optional splitting of long LIN moves (like "Divide Length").
-- **Orientation**: tries ±X/±Y/±Z and the largest flat faces of the convex hull. Scored on overhangs beyond the critical angle, islands starting in mid-air, contours per layer (each separate contour = an extruder stop), contact area, height.
+- **Orientation**: tries ±X/±Y/±Z and the largest flat faces of the convex hull. Scored on overhangs beyond the critical angle, islands starting in mid-air, contours per layer (each separate contour = an extruder stop), contact area, height. Before scoring, every orientation goes through the hard checks (no islands in mid-air, overhangs within 2%): those that fail are marked *not valid* and listed last. If none is valid the site says so and export requires the confirmation.
 - **Print mode**: *contour layers* by default (constant Z per layer, layer change on the same vertical without stopping the extruder, like Tavolino1); between separate contours the extruder is switched off, the nozzle lifted and restarted. The other modes (spiral, solid, surface) are chosen from the menu: see the table below. The spiral is used only when every layer is a single contour, otherwise it falls back to planar layers.
+- **Verified links**: a connection between two segments is extruded only if it is short (*Jump without stop*, or up to 8 beads between neighbouring serpentine passes) **and** stays on the material along its whole length (inside the layer section, or on the top surface in surface mode), with a margin of at most 1 mm. All others become lifted travels with the extruder off. The heuristic choices (pass direction, order) are made only among paths whose links passed this check.
 - **Thin shells**: a hollow solid whose thickness is ≤ "Shell → mid-line" is printed with a single bead on its mid-line (instead of outer + inner skin).
 - **Multiple walls**: inward offsets with Clipper.
 

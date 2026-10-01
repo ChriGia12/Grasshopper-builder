@@ -58,6 +58,7 @@ const li = (text: string, className = '') => Object.assign(document.createElemen
 const escapeHtml = (s: string) => s.replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`);
 const viewer = new Viewer($('viewport'));
 const offBedOk = $<HTMLInputElement>('offBedOk');
+const supportOk = $<HTMLInputElement>('supportOk');
 const tiltOk = $<HTMLInputElement>('tiltOk');
 
 // ---------- workers (restarted when a newer request supersedes a running one) ----------
@@ -485,6 +486,7 @@ function invalidate() {
   lastSrc = '';
   // A confirmation refers to one result: any change asks for it again.
   offBedOk.checked = false;
+  supportOk.checked = false;
   tiltOk.checked = false;
   updateExport();
 }
@@ -537,6 +539,7 @@ interface BuildMsg {
   reach: ReachReport;
   errors: Msg[];
   offBed: boolean;
+  support: { islands: number; overhang: number } | null;
 }
 
 let currentMeta: Toolpath | null = null;
@@ -796,6 +799,7 @@ function exportBlocks(): string[] {
   // A path the robot cannot follow must not reach the controller.
   if (r.reach.unreachable > 0 || r.reach.outOfLimits > 0) out.push(t('out.blocked'));
   if (r.offBed && !offBedOk.checked) out.push(t('out.blockedOffBed'));
+  if (r.support && !supportOk.checked) out.push(t('out.blockedSupport'));
   if (tiltNeedsConfirm() && !tiltOk.checked) out.push(t('out.blockedTilt'));
   return out;
 }
@@ -808,6 +812,8 @@ function updateExport() {
   const blocks = exportBlocks();
   $<HTMLButtonElement>('download').disabled = !ready || blocks.length > 0;
   $('offBedRow').hidden = !(ready && lastBuild!.offBed);
+  $('supportRow').hidden = !(ready && lastBuild!.support);
+  if (lastBuild?.support) $('supportLabel').textContent = t('out.supportConfirm', { n: lastBuild.support.islands, p: lastBuild.support.overhang });
   $('tiltRow').hidden = !(ready && tiltNeedsConfirm());
   if (lastBuild) $('tiltLabel').textContent = t('out.tiltConfirm', { n: lastBuild.meta.tiltX ?? 0 });
   const fields = [...fieldErrors].map((k) => li(t('v.field', { field: `f.${k.split('.')[0]}` }), 'blocked'));
@@ -816,6 +822,7 @@ function updateExport() {
 }
 
 offBedOk.addEventListener('change', updateExport);
+supportOk.addEventListener('change', updateExport);
 tiltOk.addEventListener('change', updateExport);
 $('download').onclick = () => {
   if (!lastSrc || !lastBuild || exportBlocks().length) return;

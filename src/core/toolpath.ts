@@ -184,19 +184,45 @@ function prepareLoop(c: Contour, s: PrintSettings, near: Vec2): Vec2[] {
   return densify(rotateToNearest(simple, near), s.maxSegment, true);
 }
 
-/** Reach `to` either extruding (short hop, e.g. aligned seams between layers) or with a lifted travel. */
-function moveTo(tp: Toolpath, to: Vec2, z: number, s: PrintSettings, c?: number, link: boolean | Contour[] = false) {
+/** Checks that a straight connection a→b lies on material (the layer region, or the top surface). */
+type Inside = (a: Vec2, b: Vec2) => boolean;
+
+/** Below this hop the nozzle stays on the same spot (seam on the same vertical): always printed. */
+const SAME_SPOT = 0.5;
+
+/**
+ * Printed links may graze the region border by this much: the bead is centred on the contour.
+ * Gaps narrower than twice this are closed by the bead anyway.
+ */
+const linkMargin = (s: PrintSettings) => Math.min(1, s.wallSpacing / 4);
+
+/** `Inside` for a planar region, grown by the link margin (computed on first use). */
+function insideRegion(region: Contour[], s: PrintSettings): Inside {
+  let grown: Contour[] | null = null;
+  return (a, b) => segmentInside(a, b, (grown ??= offsetContours(region, linkMargin(s))));
+}
+
+/**
+ * A connection is extruded only when it is verified: short enough (`maxBridge`, or up to 8 beads
+ * for the serpentine fill when `long`) and lying on material along its whole length. Anything
+ * else becomes a lifted travel with the extruder off. The heuristics (fill direction, order)
+ * choose among paths whose links went through this same check.
+ */
+export function linkPrintable(a: Vec2, b: Vec2, s: PrintSettings, inside: Inside | undefined, long = false): boolean {
+  const hop = Math.hypot(b[0] - a[0], b[1] - a[1]);
+  if (hop <= SAME_SPOT) return true;
+  if (!inside || hop > (long ? Math.max(s.maxBridge, 8 * s.wallSpacing) : s.maxBridge)) return false;
+  return inside(a, b);
+}
+
+/** Reach `to` either extruding (verified link, see linkPrintable) or with a lifted travel. */
+function moveTo(tp: Toolpath, to: Vec2, z: number, s: PrintSettings, c?: number, inside?: Inside, long = false) {
   const last = tp.points[tp.points.length - 1];
   if (!last) {
     push(tp, { x: to[0], y: to[1], z, e: false, c });
     return;
   }
-  const hop = Math.hypot(to[0] - last.x, to[1] - last.y);
-  // `link`: connection inside the area being filled — true for the serpentine step to the
-  // neighbouring pass, or the island outline when the segment stays inside it. Printed up to
-  // 8 beads, so a sloped border or a branch of the fill does not stop the extruder.
-  const inside = Array.isArray(link) ? segmentInside([last.x, last.y], to, link) : link;
-  if (hop <= s.maxBridge || (inside && hop <= 8 * s.wallSpacing)) {
+  if (linkPrintable([last.x, last.y], to, s, inside, long)) {
     push(tp, { x: to[0], y: to[1], z, e: true, c });
     return;
   }
@@ -227,11 +253,12 @@ function buildPlanar(tp: Toolpath, layers: Layer[], s: PrintSettings, start: Vec
   for (const layer of layers) {
     tp.layerStart.push(tp.points.length);
     const closed = layer.contours.filter((c) => c.closed);
+    const inside = insideRegion(closed, s);
     for (const wall of buildWalls(closed, s.walls, s.wallSpacing)) {
       const pending = [...wall];
       while (pending.length) {
         const loop = prepareLoop(pending.splice(nearestIndex(pending, cur), 1)[0], s, cur);
-        moveTo(tp, loop[0], layer.z, s);
+        moveTo(tp, loop[0], layer.z, s, undefined, inside);
         for (let i = 1; i < loop.length; i++) push(tp, { x: loop[i][0], y: loop[i][1], z: layer.z, e: true });
         push(tp, { x: loop[0][0], y: loop[0][1], z: layer.z, e: true });
         cur = loop[0];
@@ -242,7 +269,7 @@ function buildPlanar(tp: Toolpath, layers: Layer[], s: PrintSettings, start: Vec
       const dStart = Math.hypot(pts[0][0] - cur[0], pts[0][1] - cur[1]);
       const dEnd = Math.hypot(pts[pts.length - 1][0] - cur[0], pts[pts.length - 1][1] - cur[1]);
       if (dEnd < dStart) pts = pts.reverse();
-      moveTo(tp, pts[0], layer.z, s);
+      moveTo(tp, pts[0], layer.z, s, undefined, inside);
       for (let i = 1; i < pts.length; i++) push(tp, { x: pts[i][0], y: pts[i][1], z: layer.z, e: true });
       cur = pts[pts.length - 1];
     }
@@ -258,14 +285,15 @@ function buildSpiral(tp: Toolpath, layers: Layer[], s: PrintSettings, start: Vec
     tp.layerStart.push(tp.points.length);
     const loop = prepareLoop(layer.contours[0], s, cur);
     const ring = [...loop, loop[0]];
+    const inside = insideRegion(layer.contours, s);
     if (li === 0) {
       // Flat first layer for adhesion.
-      moveTo(tp, loop[0], layer.z, s);
+      moveTo(tp, loop[0], layer.z, s, undefined, inside);
       for (let i = 1; i < ring.length; i++) push(tp, { x: ring[i][0], y: ring[i][1], z: layer.z, e: true });
     } else {
       const total = polylineLength(ring, false);
       let acc = 0;
-      moveTo(tp, loop[0], layer.z - h, s);
+      moveTo(tp, loop[0], layer.z - h, s, undefined, inside);
       for (let i = 1; i < ring.length; i++) {
         acc += Math.hypot(ring[i][0] - ring[i - 1][0], ring[i][1] - ring[i - 1][1]);
         push(tp, { x: ring[i][0], y: ring[i][1], z: layer.z - h + (h * acc) / total, e: true });
@@ -295,8 +323,21 @@ function segmentInside(a: Vec2, b: Vec2, region: Contour[]): boolean {
   return true;
 }
 
+/** `Inside` on the top surface: every sample of the link must lie over a top face (not a side). */
+function onTopSurface(hf: HeightField, s: PrintSettings): Inside {
+  const minNz = Math.cos((s.surfaceMaxSlope * Math.PI) / 180);
+  return (a, b) => {
+    const n = Math.max(2, Math.ceil(Math.hypot(b[0] - a[0], b[1] - a[1])));
+    for (let k = 1; k < n; k++) {
+      const t = hf.top(a[0] + ((b[0] - a[0]) * k) / n, a[1] + ((b[1] - a[1]) * k) / n);
+      if (!t || t.n[2] < minNz) return false;
+    }
+    return true;
+  };
+}
+
 /** Print surface runs (non-planar) raised by dz, with optional C from the normal. */
-function printSurfaceRuns(tp: Toolpath, runs: SurfaceRun[], dz: number, s: PrintSettings, cur: Vec2): Vec2 {
+function printSurfaceRuns(tp: Toolpath, runs: SurfaceRun[], dz: number, s: PrintSettings, cur: Vec2, inside: Inside): Vec2 {
   const end = (r: SurfaceRun, e: 'a' | 'b'): Vec2 => {
     const q = e === 'a' ? r.pts[0] : r.pts[r.pts.length - 1];
     return [q.x, q.y];
@@ -308,7 +349,7 @@ function printSurfaceRuns(tp: Toolpath, runs: SurfaceRun[], dz: number, s: Print
       countTiltX(tp, q.n);
       return cFromNormal(q.n);
     };
-    moveTo(tp, [pts[0].x, pts[0].y], pts[0].z + dz, s, cOf(pts[0]), link);
+    moveTo(tp, [pts[0].x, pts[0].y], pts[0].z + dz, s, cOf(pts[0]), inside, link);
     for (const q of pts.slice(1)) push(tp, { x: q.x, y: q.y, z: q.z + dz, e: true, c: cOf(q) });
     cur = [pts[pts.length - 1].x, pts[pts.length - 1].y];
   }
@@ -332,7 +373,7 @@ type ZAt = (x: number, y: number) => { z: number; c?: number } | null;
  * vertices are used as they are; blended (non-planar) layers are sampled every `step` mm along
  * the line and simplified in the (distance, z) profile with the contour tolerance.
  */
-function printLine(tp: Toolpath, line: Vec2[], zAt: ZAt, s: PrintSettings, step: number, link: boolean | Contour[]): Vec2 {
+function printLine(tp: Toolpath, line: Vec2[], zAt: ZAt, s: PrintSettings, step: number, inside: Inside, long: boolean): Vec2 {
   let pts: { p: Vec2; z: number; c?: number }[] = [];
   const add = (p: Vec2) => {
     const h = zAt(p[0], p[1]);
@@ -352,7 +393,7 @@ function printLine(tp: Toolpath, line: Vec2[], zAt: ZAt, s: PrintSettings, step:
     pts = pts.filter((_, i) => keep.has(i));
   }
   if (!pts.length) return line[line.length - 1];
-  moveTo(tp, pts[0].p, pts[0].z, s, pts[0].c, link);
+  moveTo(tp, pts[0].p, pts[0].z, s, pts[0].c, inside, long);
   for (const q of pts.slice(1)) push(tp, { x: q.p[0], y: q.p[1], z: q.z, e: true, c: q.c });
   return pts[pts.length - 1].p;
 }
@@ -403,13 +444,25 @@ function buildZigzag(tp: Toolpath, mesh: MeshData, layers: Layer[], s: PrintSett
 
   const fillRegionOf = (island: Contour[]) => (s.fillPerimeter ? offsetContours(island, -(s.walls - 0.5) * w) : island);
   const fillOf = (island: Contour[], angle: number) => scanFill(fillRegionOf(island), w, angle, s.fillPerimeter ? w / 4 : w / 2);
+  const insideOf = new Map<Contour[], Inside>();
+  const insideIsland = (island: Contour[]) => insideOf.get(island) ?? insideOf.set(island, insideRegion(island, s)).get(island)!;
   // Pass direction: fixed (alternating 90° if asked) or automatic — the one of 0/45/90/135°
   // whose serpentine breaks least (excluding the previous layer's direction when alternating).
   const chooseAngle = (parts: Contour[][], li: number) => {
     let angle = passAngle(s, li);
     if (s.fillAutoAngle && parts.length) {
+      // Breaks = links that fail the same check used when printing (linkPrintable).
       const breaks = (a: number) =>
-        parts.reduce((m, g) => m + serpentine(fillOf(g, a), cur, (q, e) => q[e]).filter(([, , link], i) => i > 0 && !link).length, 0);
+        parts.reduce((m, g) => {
+          let end: Vec2 | null = null;
+          let n = 0;
+          for (const [p, flip] of serpentine(fillOf(g, a), cur, (q, e) => q[e])) {
+            const [pa, pb] = flip ? [p.b, p.a] : [p.a, p.b];
+            if (end && !linkPrintable(end, pa, s, insideIsland(g), true)) n++;
+            end = pb;
+          }
+          return m + n;
+        }, 0);
       const cands = [0, 45, 90, 135].map((a) => (s.fillAngle + a) % 180).filter((a) => !s.fillAlternate || prevAngle === null || a !== prevAngle);
       angle = cands.reduce((best, a) => (breaks(a) < breaks(best) ? a : best), cands[0]);
     }
@@ -431,16 +484,17 @@ function buildZigzag(tp: Toolpath, mesh: MeshData, layers: Layer[], s: PrintSett
           const pending = [...wall];
           while (pending.length) {
             const loop = prepareLoop(pending.splice(nearestIndex(pending, cur), 1)[0], s, cur);
-            printLine(tp, [...loop, loop[0]], zAt, s, step, false);
+            printLine(tp, [...loop, loop[0]], zAt, s, step, insideIsland(island), false);
             cur = loop[0];
           }
         }
       // Passes keep half a bead from the region edge; with perimeters their ends overlap the
-      // perimeter bead by a quarter bead so the two fuse. Links inside the island are printed.
-      for (const [p, flip, link] of serpentine(fillOf(island, angle), cur, (q, e) => q[e])) {
+      // perimeter bead by a quarter bead so the two fuse. Links are printed only when verified
+      // to stay inside the island (up to 8 beads), otherwise the nozzle travels lifted.
+      for (const [p, flip] of serpentine(fillOf(island, angle), cur, (q, e) => q[e])) {
         const [a, b] = flip ? [p.b, p.a] : [p.a, p.b];
         const line = step > 0 ? [a, b] : densify([a, b], s.maxSegment, false);
-        cur = printLine(tp, line, zAt, s, step, link || island);
+        cur = printLine(tp, line, zAt, s, step, insideIsland(island), true);
       }
     }
   };
@@ -494,6 +548,7 @@ function buildSurface(mesh: MeshData, s: PrintSettings, start: Vec2): Toolpath {
     warnings: [],
   };
   const hf = new HeightField(mesh);
+  const onTop = onTopSurface(hf, s);
   let cur: Vec2 = start;
   for (let k = 0; k < s.surfacePasses; k++) {
     tp.layerStart.push(tp.points.length);
@@ -502,7 +557,7 @@ function buildSurface(mesh: MeshData, s: PrintSettings, start: Vec2): Toolpath {
       tp.warnings.push(msg('w.noTopSurface'));
       break;
     }
-    cur = printSurfaceRuns(tp, runs, s.firstLayerZ + k * s.layerHeight, s, cur);
+    cur = printSurfaceRuns(tp, runs, s.firstLayerZ + k * s.layerHeight, s, cur, onTop);
     if (k === 0) [tp.coverage, tp.topArea] = surfaceCoverage(mesh, runs, s, hf);
   }
   if (tp.coverage !== undefined && tp.coverage < 0.8) tp.warnings.push(msg('w.coverage', { p: Math.round(tp.coverage * 100) }));

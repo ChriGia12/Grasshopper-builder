@@ -20,7 +20,7 @@ Il sito è in **italiano e inglese**: il pulsante EN / IT in alto a destra cambi
 - se il robot non raggiunge un punto del percorso o un punto intermedio dei LIN (campionati ogni 20 mm), o se un asse supera i limiti del KR16;
 - se un punto del percorso scende sotto il piano di lavoro (lastra a Z 38 in BASE): non si può confermare;
 - se un campo numerico è vuoto o non valido;
-- se il percorso esce dal piano di lavoro in pianta, o se con *inclina utensile* ci sono punti con pendenza lungo X non seguibile: in questi due casi serve una conferma esplicita, che si azzera a ogni modifica.
+- se il percorso esce dal piano di lavoro in pianta, se con *inclina utensile* ci sono punti con pendenza lungo X non seguibile, o se nell'orientamento scelto il pezzo ha isole che partono nel vuoto o più del 2% di superficie in sbalzo oltre l'angolo critico: in questi casi serve una conferma esplicita, che si azzera a ogni modifica.
 
 **Limiti.** Il sito non verifica le collisioni del braccio o del mandrino con tavola e pezzo, né il moto PTP verso le posizioni di sicurezza. Il controllo dei LIN intermedi verifica il percorso geometrico programmato, non la traiettoria raccordata che il controller esegue con `C_DIS` (default, come Tavolino1): con `C_DIS` il robot non passa esattamente per ogni punto; l'opzione *Approssimazione LIN → Nessuna* fa fermare il robot su ogni punto. Prima della stampa il `.src` va comunque provato a vuoto o nella simulazione della cella reale.
 
@@ -67,8 +67,9 @@ Le librerie rhino3dm e OpenCascade sono servite dal sito stesso (`public/vendor`
 ## Come funziona
 
 - **Slicing esatto**: ogni strato è l'intersezione del piano con la mesh; i segmenti vengono concatenati usando la topologia (spigoli condivisi), quindi i contorni sono chiusi e seguono la geometria reale. Semplificazione Douglas–Peucker con tolleranza impostabile (default 0,2 mm), opzionale suddivisione dei LIN troppo lunghi (come "Divide Length").
-- **Orientamento**: prova ±X/±Y/±Z e le facce piane più grandi dell'inviluppo convesso. Punteggio su sbalzi oltre l'angolo critico, isole che partono nel vuoto, numero di contorni per strato (ogni contorno separato = stop dell'estrusore), superficie d'appoggio, altezza.
+- **Orientamento**: prova ±X/±Y/±Z e le facce piane più grandi dell'inviluppo convesso. Punteggio su sbalzi oltre l'angolo critico, isole che partono nel vuoto, numero di contorni per strato (ogni contorno separato = stop dell'estrusore), superficie d'appoggio, altezza. Prima del punteggio ogni orientamento passa i controlli bloccanti (nessuna isola nel vuoto, sbalzi entro il 2%): quelli che non li superano sono segnati *non validi* e messi in fondo. Se nessuno è valido il sito lo dice e l'esportazione richiede la conferma.
 - **Modo di stampa**: di default *contorno a strati* (Z fissa per strato, cambio strato sulla stessa verticale senza fermare l'estrusore, come Tavolino1); tra contorni separati estrusore spento, sollevamento e riaccensione. Gli altri modi (spirale, pieno, superficie) si scelgono dal menu: vedi la tabella sotto. La spirale si usa solo se ogni strato è un unico contorno, altrimenti torna agli strati planari.
+- **Collegamenti verificati**: un collegamento tra due tratti viene estruso solo se è corto (*Salto senza stop*, o fino a 8 cordoli tra passate vicine della serpentina) **e** resta sul materiale per tutta la lunghezza (dentro la sezione dello strato, o sulla superficie superiore nel modo superficie), con un margine di 1 mm al massimo. Tutti gli altri diventano spostamenti sollevati a estrusore spento. Le scelte euristiche (direzione delle passate, ordine) avvengono solo tra percorsi i cui collegamenti hanno passato questo controllo.
 - **Gusci sottili**: un solido cavo con spessore ≤ "Guscio → linea media" viene stampato con un solo cordolo sulla linea media (invece di pelle esterna + interna).
 - **Pareti multiple**: offset verso l'interno con Clipper.
 
