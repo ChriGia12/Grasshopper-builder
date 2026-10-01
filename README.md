@@ -50,11 +50,13 @@ Il robot sta nel mondo Rhino a (0, −1000, 0): il punto disegnato in `BASE ROBO
 
 ## Uso rapido
 
-1. **Carica il pezzo**: una mesh o un BREP; un nuovo file sostituisce il precedente. Da un `.3dm` con tutta la scena viene preso solo l'oggetto che sta sul piano di lavoro.
-2. Il sito propone l'orientamento migliore (sezione Orientamento); scegli il modo di stampa in *Stampa*.
-3. **Posiziona pezzo**: clicca sulla lastra nell'anteprima per spostare il centro del pezzo; la rotazione sul piano è in *Robot KUKA e piano → Rotazione pezzo Z*.
+1. **Carica il pezzo**: una mesh o un BREP. Ogni file aggiunge un pezzo alla lista: i pezzi vengono stampati insieme, strato per strato, ognuno con il suo orientamento e la sua posizione (un nuovo pezzo si mette accanto agli altri; se due pezzi si sovrappongono compare un avviso). Clic su un pezzo della lista per modificarlo, × per toglierlo. Da un `.3dm` con tutta la scena viene preso solo l'oggetto che sta sul piano di lavoro.
+2. Il sito propone l'orientamento migliore del pezzo selezionato (sezione Orientamento); scegli il modo di stampa in *Stampa*.
+3. **Posiziona pezzo**: clicca sulla lastra nell'anteprima per spostare il centro del pezzo selezionato; la rotazione sul piano è in *Robot KUKA e piano → Rotazione pezzo Z*.
 4. **Punto iniziale**: clicca vicino al contorno dove vuoi che parta la stampa (punto azzurro).
-5. **Scarica .src**.
+5. **Scarica .src**. **Scheda PDF** apre una scheda riassuntiva (immagine, pezzi, esito di tutti i controlli, risultato, impostazioni) da stampare o salvare in PDF.
+
+**Progetti.** *Salva progetto* scarica un file `.kinepath` con i file originali dei pezzi, il loro orientamento e la posizione e tutte le impostazioni; *Apri progetto* (o trascinare il file sulla zona di caricamento) riporta il sito esattamente a quello stato.
 
 ## Formati supportati
 

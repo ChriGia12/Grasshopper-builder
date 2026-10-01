@@ -156,6 +156,12 @@ export class Viewer {
     }
   }
 
+  /** PNG image of the current view (for the printable report). */
+  snapshot(): string {
+    this.renderer.render(this.scene, this.camera);
+    return this.renderer.domElement.toDataURL('image/png');
+  }
+
   setZonesVisible(v: boolean) {
     this.zones.visible = v;
   }

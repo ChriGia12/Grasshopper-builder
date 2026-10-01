@@ -1,7 +1,7 @@
 import './style.css';
 import { ACCEPTED, combineParts, loadModel, pickPieces, type CellRegion } from './core/loaders';
 import { sanitizeProgramName } from './core/kuka';
-import { IDENTITY, dropToOrigin, meshStats, mulMat3, rotX, rotY, rotZ, type Mat3, type MeshData } from './core/mesh';
+import { IDENTITY, applyMatrix, computeBounds, dropToOrigin, mergeMeshes, meshStats, mulMat3, rotX, rotY, rotZ, translate, type Mat3, type MeshData } from './core/mesh';
 import type { OrientationCandidate } from './core/orientation';
 import { placementOffset } from './core/pipeline';
 import { FIXED_ROBOT, validateSettings } from './core/validate';
@@ -48,11 +48,32 @@ try {
   /* storage unavailable: defaults already apply */
 }
 
-let sourceName = '';
-let mesh: MeshData | null = null;
-let orientations: OrientationCandidate[] = [];
-let orientIdx = 0;
-let manual: Mat3 = [...IDENTITY] as Mat3;
+/** One part on the plate: its own file, orientation and position. */
+interface Part {
+  name: string;
+  format: string;
+  notes: Msg[];
+  /** Original file, kept to save the project. */
+  file: { name: string; bytes: ArrayBuffer };
+  mesh: MeshData;
+  orientations: OrientationCandidate[];
+  orientIdx: number;
+  manual: Mat3;
+  /** Centre in BASE and turn about Z (placement "centre on the point"). */
+  x: number;
+  y: number;
+  rotZ: number;
+  /** false until the first analysis has put the part next to the others. */
+  placed: boolean;
+  /** From a saved project: orientation to pick again once the analysis is done. */
+  wantDown?: [number, number, number];
+}
+let parts: Part[] = [];
+let active = -1;
+const cur = (): Part | undefined => parts[active];
+/** Settings are remembered with the position of the first part (the others belong to the plate). */
+const saveRobot = () => save('gb.robot', parts[0] ? { ...robot, originX: parts[0].x, originY: parts[0].y, rotationZ: parts[0].rotZ } : robot);
+const hasParts = () => parts.length > 0;
 let lastSrc = '';
 
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
@@ -120,20 +141,19 @@ async function busy<T>(text: string, fn: () => Promise<T>): Promise<T> {
   }
 }
 
-// ---------- step 1: the piece ----------
-// Robot, table and mandrino are fixed in the cell; the user only brings one piece
-// (a mesh or a BREP). A new file replaces the previous one. A whole Rhino scene is
-// reduced to the object standing on the work table.
+// ---------- step 1: the parts ----------
+// Robot, table and mandrino are fixed in the cell; the user brings the parts to print (meshes
+// or BREPs). Every file adds one part with its own orientation and position; all parts are
+// printed together, layer by layer. A whole Rhino scene is reduced to the object standing on
+// the work table.
 
-let pieceFormat = '';
-let pieceNotes: Msg[] = [];
 let pieceError: Msg | string | undefined;
 
 const fileInput = $<HTMLInputElement>('file');
-fileInput.accept = ACCEPTED;
+fileInput.accept = ACCEPTED + ',.kinepath';
 const drop = $('drop');
 fileInput.addEventListener('change', () => {
-  if (fileInput.files?.[0]) openFile(fileInput.files[0]);
+  if (fileInput.files?.[0]) openAny(fileInput.files[0]);
   fileInput.value = '';
 });
 drop.addEventListener('dragover', (e) => {
@@ -145,67 +165,147 @@ drop.addEventListener('drop', (e) => {
   e.preventDefault();
   drop.classList.remove('over');
   const f = e.dataTransfer?.files[0];
-  if (f) openFile(f);
+  if (f) openAny(f);
 });
+
+/** A project file (.kinepath) restores everything; any other file adds a part. */
+function openAny(f: File) {
+  if (/\.kinepath$/i.test(f.name)) return openProject(f);
+  return addPart(f);
+}
 
 function setNotes(notes: Msg[], error?: Msg | string) {
   pieceError = error;
   $('modelNotes').replaceChildren(...notes.map((n) => li(tm(n))), ...(error ? [li(tm(error), 'error')] : []));
 }
 
-async function openFile(file: File) {
-  invalidate();
-  const cell: CellRegion = {
-    worldBase: [robot.worldBaseX, robot.worldBaseY, robot.worldBaseZ],
-    bedCenter: [robot.bedCenterX, robot.bedCenterY],
-    bedSize: [robot.bedSizeX, robot.bedSizeY],
-  };
-  let piece: MeshData;
+const cellRegion = (): CellRegion => ({
+  worldBase: [robot.worldBaseX, robot.worldBaseY, robot.worldBaseZ],
+  bedCenter: [robot.bedCenterX, robot.bedCenterY],
+  bedSize: [robot.bedSizeX, robot.bedSizeY],
+});
+
+/** Reads a file into a part (not analysed yet); throws with a translatable message. */
+async function readPart(name: string, bytes: ArrayBuffer): Promise<Part> {
+  const model = await busy(t('busy.read', { name }), () => loadModel(new File([bytes], name)));
+  const { parts: pieces, note } = pickPieces(model, cellRegion());
   const notes: Msg[] = [];
-  try {
-    const model = await busy(t('busy.read', { name: file.name }), () => loadModel(file));
-    const { parts, note } = pickPieces(model, cell);
-    if (note) notes.push(note);
-    if (!parts.length) throw new MsgError(note ?? msg('e.noPrintable'));
-    piece = combineParts(parts);
-    // Ignored blocks / curves are the rest of the scene: not worth a note.
-    notes.push(...model.notes.filter((n) => n.k !== 'n.blocks' && n.k !== 'n.skipped'));
-    pieceFormat = model.format;
-  } catch (e) {
-    setNotes(notes, errText(e));
-    return;
-  }
-  pieceNotes = notes;
-  sourceName = file.name;
-  robot.programName = sanitizeProgramName(file.name);
-  save('gb.robot', robot);
-  renderRobotFields();
-  mesh = piece;
-  // The orientations belong to the previous part: if this analysis stops (invalid parameter), the
-  // next build must analyse the new part again instead of reusing them.
-  orientations = [];
-  orientIdx = 0;
-  manual = [...IDENTITY] as Mat3;
-  renderOrientations();
-  $('step-orient').hidden = true;
-  $('pieceName').textContent = file.name;
-  $('pieceName').hidden = false;
-  setNotes(pieceNotes);
-  showModelInfo(mesh);
+  if (note) notes.push(note);
+  if (!pieces.length) throw new MsgError(note ?? msg('e.noPrintable'));
+  // Ignored blocks / curves are the rest of the scene: not worth a note.
+  notes.push(...model.notes.filter((n) => n.k !== 'n.blocks' && n.k !== 'n.skipped'));
+  return {
+    name,
+    format: model.format,
+    notes,
+    file: { name, bytes },
+    mesh: combineParts(pieces),
+    orientations: [],
+    orientIdx: 0,
+    manual: [...IDENTITY] as Mat3,
+    x: robot.originX,
+    y: robot.originY,
+    rotZ: robot.rotationZ,
+    placed: false,
+  };
+}
+
+/** First part on an empty plate: show it at once, before the analysis. */
+function showFirstPart(p: Part) {
   $('empty').hidden = true;
   lastSrc = '';
   viewer.setToolpath(null, null, [], [0, 0, 0]);
-  const off = placementOffset(mesh, robot);
-  viewer.setModel(dropToOrigin(mesh), off, 1);
+  viewer.setModel(dropToOrigin(p.mesh), placementOffset(p.mesh, robot), 1);
   viewer.setBed(robot.bedSizeX, robot.bedSizeY, [robot.bedCenterX, robot.bedCenterY, robot.bedTopZ]);
   viewer.fit();
-  await analyze();
 }
 
-function showModelInfo(m: MeshData) {
-  const s = meshStats(m);
+async function addPart(file: File) {
+  invalidate();
+  let part: Part;
+  try {
+    part = await readPart(file.name, await file.arrayBuffer());
+  } catch (e) {
+    setNotes(cur()?.notes ?? [], errText(e));
+    return;
+  }
+  if (!hasParts()) {
+    robot.programName = sanitizeProgramName(file.name);
+    saveRobot();
+  }
+  parts.push(part);
+  selectPart(parts.length - 1);
+  if (parts.length === 1) showFirstPart(part);
+  fitNext = true;
+  await analyze([part]);
+}
+
+/** Make part i the one edited by the orientation panel, the position fields and the clicks. */
+function selectPart(i: number) {
+  active = i;
+  const p = cur();
+  if (p) Object.assign(robot, { originX: p.x, originY: p.y, rotationZ: p.rotZ });
+  renderRobotFields();
+  renderParts();
+  renderOrientations();
+  $('step-orient').hidden = !p?.orientations.length;
+  if (p) {
+    showModelInfo(p);
+    setNotes(p.notes);
+  }
+}
+
+/** Back to the empty plate. */
+function clearParts() {
+  parts = [];
+  active = -1;
+  lastBuild = null;
+  currentMeta = null;
+  invalidate();
+  for (const id of ['step-orient', 'step-print', 'step-robot', 'step-out', 'modelInfo', 'vpTools']) $(id).hidden = true;
+  $('empty').hidden = false;
+  setNotes([]);
+  renderParts();
+  viewer.setModel(null, [0, 0, 0]);
+  viewer.setToolpath(null, null, [], [0, 0, 0]);
+  viewer.setZones(null, null, [0, 0, 0]);
+  viewer.setCollisions(null);
+  viewer.setStartMarker(null);
+}
+
+function removePart(i: number) {
+  parts.splice(i, 1);
+  if (!hasParts()) return clearParts();
+  selectPart(Math.min(active, parts.length - 1));
+  fitNext = true;
+  build();
+}
+
+function renderParts() {
+  $('partList').hidden = !hasParts();
+  $<HTMLButtonElement>('saveProject').disabled = !hasParts();
+  $('partList').replaceChildren(
+    ...parts.map((p, i) => {
+      const item = document.createElement('li');
+      item.className = i === active ? 'sel' : '';
+      const name = Object.assign(document.createElement('span'), { className: 'title', textContent: p.name });
+      const del = Object.assign(document.createElement('button'), { className: 'ghost small', textContent: '×', title: t('parts.remove') });
+      del.setAttribute('aria-label', t('parts.remove'));
+      del.onclick = (e) => {
+        e.stopPropagation();
+        removePart(i);
+      };
+      item.append(name, del);
+      item.onclick = () => selectPart(i);
+      return item;
+    }),
+  );
+}
+
+function showModelInfo(p: Part) {
+  const s = meshStats(p.mesh);
   const rows: [string, string][] = [
-    [t('info.format'), pieceFormat],
+    [t('info.format'), p.format],
     [t('info.tris'), s.triangles.toLocaleString(locale())],
     [t('info.size'), `${s.size.map((v) => v.toFixed(1)).join(' × ')} mm`],
     [t('info.closed'), s.openEdges ? t('info.closed.no', { n: s.openEdges }) : t('info.closed.yes')],
@@ -219,42 +319,73 @@ function showModelInfo(m: MeshData) {
   $('modelInfo').replaceChildren(dl);
 }
 
-// ---------- step 2: orientation ----------
+// ---------- step 2: orientation (per part) ----------
 
-async function analyze() {
+const orientedMatrix = (p: Part) => mulMat3(p.manual, p.orientations[p.orientIdx].matrix);
+
+/** Size of the part on the plate in its chosen orientation and turn. */
+function plannedSize(p: Part): [number, number] {
+  const b = computeBounds(applyMatrix(p.mesh, mulMat3(rotZ(p.rotZ), orientedMatrix(p))));
+  return [b.max[0] - b.min[0], b.max[1] - b.min[1]];
+}
+
+/** A new part goes beside the others along Y (the long side of the plate), 20 mm apart. */
+function placeNewPart(p: Part) {
+  p.placed = true;
+  const others = parts.filter((q) => q !== p && q.placed && q.orientations.length);
+  if (!others.length) return;
+  const edge = Math.max(...others.map((q) => q.y + plannedSize(q)[1] / 2));
+  p.x = others[0].x;
+  p.y = Math.round(edge + 20 + plannedSize(p)[1] / 2);
+}
+
+/** Analyse the orientations of some parts (all by default), then compute the path. */
+async function analyze(which: Part[] = parts) {
   invalidate();
-  if (!mesh) return;
+  if (!hasParts()) return;
   if (!checkSettings()) {
     for (const id of ['step-print', 'step-robot', 'step-out']) $(id).hidden = false;
     return;
   }
-  const m = mesh;
-  try {
-    const res = await busy(t('busy.orient'), () =>
-      run<{ orientations: OrientationCandidate[] }>('analyze', { type: 'analyze', mesh: m, print: { ...print } }),
-    );
-    if (m !== mesh) return;
-    orientations = res.orientations;
-  } catch (e) {
-    if (!(e instanceof Superseded) && m === mesh) setNotes(pieceNotes, errText(e));
-    return;
+  for (const p of which) {
+    if (!parts.includes(p)) continue;
+    const m = p.mesh;
+    let res: { orientations: OrientationCandidate[] };
+    try {
+      res = await busy(t('busy.orient'), () => run<{ orientations: OrientationCandidate[] }>('analyze', { type: 'analyze', mesh: m, print: { ...print } }));
+    } catch (e) {
+      if (!(e instanceof Superseded) && parts.includes(p)) setNotes(p.notes, errText(e));
+      return;
+    }
+    if (!parts.includes(p)) continue;
+    p.orientations = res.orientations;
+    // A saved project brings its orientation back (with its manual turns); otherwise the best one.
+    const want = p.wantDown;
+    const k = want ? res.orientations.findIndex((o) => o.down[0] * want[0] + o.down[1] * want[1] + o.down[2] * want[2] > 0.999) : -1;
+    if (k >= 0) p.orientIdx = k;
+    else {
+      p.orientIdx = 0;
+      p.manual = [...IDENTITY] as Mat3;
+    }
+    p.wantDown = undefined;
+    if (!p.placed) placeNewPart(p);
   }
-  orientIdx = 0;
-  manual = [...IDENTITY] as Mat3;
-  fitNext = true;
   for (const id of ['step-orient', 'step-print', 'step-robot', 'step-out']) $(id).hidden = false;
-  renderOrientations();
+  selectPart(Math.max(0, Math.min(active, parts.length - 1)));
   return build();
 }
 
 function renderOrientations() {
   // The section is folded by default: its title shows the orientation in use.
-  const cur = orientations[orientIdx];
-  $('orientChosen').textContent = cur ? t('orient.chosen', { label: tm(cur.label) }) : '';
+  const p = cur();
+  const list = p?.orientations ?? [];
+  const sel = p?.orientIdx ?? 0;
+  const label = list[sel] ? t('orient.chosen', { label: tm(list[sel].label) }) : '';
+  $('orientChosen').textContent = parts.length > 1 && p ? `${p.name} · ${label}` : label;
   $('orientList').replaceChildren(
-    ...orientations.map((o, i) => {
+    ...list.map((o, i) => {
       const item = document.createElement('li');
-      if (i === orientIdx) item.className = 'sel';
+      if (i === sel) item.className = 'sel';
       const facts = [
         t('orient.h', { h: o.height.toFixed(0) }),
         t('orient.base', { a: (o.baseArea / 100).toFixed(0) }),
@@ -267,8 +398,9 @@ function renderOrientations() {
         (i === 0 ? `<span class="badge">${escapeHtml(t('orient.best'))}</span>` : `<span class="muted">#${i + 1}</span>`) +
         `<span class="sub">${facts}${notes.length ? '<br>' + notes.join(' · ') : ''}</span>`;
       item.onclick = () => {
-        orientIdx = i;
-        manual = [...IDENTITY] as Mat3;
+        if (!p) return;
+        p.orientIdx = i;
+        p.manual = [...IDENTITY] as Mat3;
         renderOrientations();
         build();
       };
@@ -279,10 +411,100 @@ function renderOrientations() {
 
 document.querySelectorAll<HTMLButtonElement>('[data-rot]').forEach((b) => {
   b.onclick = () => {
+    const p = cur();
+    if (!p) return;
     const r = { x: rotX, y: rotY, z: rotZ }[b.dataset.rot as 'x' | 'y' | 'z'](90);
-    manual = mulMat3(r, manual);
+    p.manual = mulMat3(r, p.manual);
     build();
   };
+});
+
+// ---------- project: save / open (.kinepath) ----------
+// Parts (original files), their orientation and position, and all the settings in one file.
+
+interface ProjectFile {
+  app: 'KinePath';
+  version: 1;
+  print: PrintSettings;
+  robot: Partial<RobotSettings>;
+  parts: { name: string; data: string; down: [number, number, number] | null; manual: Mat3; x: number; y: number; rotZ: number }[];
+}
+
+const toBase64 = (b: ArrayBuffer) => {
+  const u = new Uint8Array(b);
+  let s = '';
+  for (let i = 0; i < u.length; i += 0x8000) s += String.fromCharCode(...u.subarray(i, i + 0x8000));
+  return btoa(s);
+};
+const fromBase64 = (s: string) => Uint8Array.from(atob(s), (c) => c.charCodeAt(0)).buffer;
+
+function saveProject() {
+  if (!hasParts()) return;
+  const own = Object.fromEntries(Object.entries(robot).filter(([k]) => !(CELL_KEYS as readonly string[]).includes(k)));
+  const data: ProjectFile = {
+    app: 'KinePath',
+    version: 1,
+    print: { ...print },
+    robot: own,
+    parts: parts.map((p) => ({
+      name: p.name,
+      data: toBase64(p.file.bytes),
+      down: p.orientations[p.orientIdx]?.down ?? null,
+      manual: p.manual,
+      x: p.x,
+      y: p.y,
+      rotZ: p.rotZ,
+    })),
+  };
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(new Blob([JSON.stringify(data)], { type: 'application/json' }));
+  a.download = sanitizeProgramName(robot.programName) + '.kinepath';
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+}
+
+async function openProject(f: File) {
+  let data: ProjectFile;
+  try {
+    data = JSON.parse(await f.text());
+    if (data.app !== 'KinePath' || !Array.isArray(data.parts)) throw new Error();
+  } catch {
+    setNotes(cur()?.notes ?? [], msg('e.project'));
+    return;
+  }
+  clearParts();
+  Object.assign(print, structuredClone(DEFAULT_PRINT), data.print);
+  Object.assign(robot, structuredClone(DEFAULT_ROBOT), data.robot);
+  for (const k of CELL_KEYS) (robot as unknown as Record<string, unknown>)[k] = structuredClone(DEFAULT_ROBOT[k]);
+  Object.assign(robot, FIXED_ROBOT);
+  save('gb.print', print);
+  saveRobot();
+  renderPrintFields();
+  const loaded: Part[] = [];
+  try {
+    for (const sp of data.parts) {
+      const p = await readPart(sp.name, fromBase64(sp.data));
+      Object.assign(p, { manual: sp.manual, x: sp.x, y: sp.y, rotZ: sp.rotZ, placed: true, wantDown: sp.down ?? undefined });
+      loaded.push(p);
+    }
+  } catch (e) {
+    setNotes([], errText(e));
+    return;
+  }
+  parts = loaded;
+  if (!hasParts()) return;
+  selectPart(0);
+  showFirstPart(parts[0]);
+  fitNext = true;
+  await analyze();
+}
+
+$('saveProject').onclick = saveProject;
+$('openProject').onclick = () => $<HTMLInputElement>('projectFile').click();
+$<HTMLInputElement>('projectFile').addEventListener('change', (e) => {
+  const input = e.target as HTMLInputElement;
+  if (input.files?.[0]) openProject(input.files[0]);
+  input.value = '';
 });
 
 // ---------- steps 3/4: settings forms ----------
@@ -417,7 +639,7 @@ function renderFields(host: HTMLElement, fields: Field[], target: Record<string,
   // and the result must be recomputed for those values (the old one was discarded).
   let cleared = false;
   for (const f of fields) if (!('group' in f)) cleared = fieldErrors.delete(f.key) || cleared;
-  if (cleared && mesh) queueMicrotask(buildSoon);
+  if (cleared && hasParts()) queueMicrotask(buildSoon);
   host.replaceChildren(
     ...fields.map((f) => {
       if ('group' in f) return Object.assign(document.createElement('div'), { className: 'group', textContent: t(f.group) });
@@ -512,7 +734,10 @@ renderPrintFields();
 
 function renderRobotFields() {
   renderFields($('robotFields'), ROBOT_FIELDS, robot as unknown as Record<string, unknown>, () => {
-    save('gb.robot', robot);
+    // Position fields belong to the part being edited.
+    const p = cur();
+    if (p) Object.assign(p, { x: robot.originX, y: robot.originY, rotZ: robot.rotationZ });
+    saveRobot();
     buildSoon();
   });
 }
@@ -521,7 +746,7 @@ renderRobotFields();
 $('resetRobot').onclick = () => {
   const name = robot.programName;
   Object.assign(robot, structuredClone(DEFAULT_ROBOT), { programName: name });
-  save('gb.robot', robot);
+  saveRobot();
   renderRobotFields();
   buildSoon();
 };
@@ -546,6 +771,39 @@ interface BuildMsg {
   collision: CollisionReport | null;
 }
 
+/**
+ * What goes to the computation. One part: the part and its orientation, exactly as before.
+ * Several parts: each one oriented, turned and placed in BASE, merged into one mesh that is
+ * printed layer by layer (the computation re-centres it on its own centre).
+ */
+function assembly(): { mesh: MeshData; matrix: Mat3; robot: RobotSettings; name: string; notes: Msg[] } {
+  const name = parts.map((p) => p.name).join(' + ');
+  if (parts.length === 1) {
+    const p = parts[0];
+    return { mesh: p.mesh, matrix: orientedMatrix(p), robot: structuredClone({ ...robot, originX: p.x, originY: p.y, rotationZ: p.rotZ }), name, notes: [] };
+  }
+  const boxes: [number, number, number, number][] = [];
+  const placed = parts.map((p) => {
+    const m = dropToOrigin(applyMatrix(p.mesh, mulMat3(rotZ(p.rotZ), orientedMatrix(p))));
+    const [x, y] = robot.placement === 'file' ? placementOffset(p.mesh, robot) : [p.x, p.y];
+    const b = computeBounds(m);
+    boxes.push([b.min[0] + x, b.min[1] + y, b.max[0] + x, b.max[1] + y]);
+    return translate(m, x, y, 0);
+  });
+  const notes: Msg[] = [];
+  boxes.forEach((a, i) =>
+    boxes.slice(i + 1).forEach((b, k) => {
+      if (a[0] < b[2] && b[0] < a[2] && a[1] < b[3] && b[1] < a[3]) notes.push(msg('w.partsOverlap', { a: parts[i].name, b: parts[i + 1 + k].name }));
+    }),
+  );
+  const all = mergeMeshes(placed);
+  const b = computeBounds(all);
+  const r = { ...robot, placement: 'origin' as const, originX: (b.min[0] + b.max[0]) / 2, originY: (b.min[1] + b.max[1]) / 2, rotationZ: 0 };
+  return { mesh: all, matrix: [...IDENTITY] as Mat3, robot: structuredClone(r), name, notes };
+}
+/** Warnings about the arrangement of the parts (overlaps), shown with the result. */
+let assemblyNotes: Msg[] = [];
+
 let currentMeta: Toolpath | null = null;
 let lastBuild: BuildMsg | null = null;
 /** Re-frame the camera only on a new model/orientation, not on every tweak. */
@@ -553,22 +811,23 @@ let fitNext = true;
 
 async function build(): Promise<BuildMsg | null> {
   invalidate();
-  if (!mesh) return null;
+  if (!hasParts()) return null;
   if (!checkSettings()) return null;
-  if (!orientations.length) return (await analyze()) ?? null;
+  const pending = parts.filter((p) => !p.orientations.length);
+  if (pending.length) return (await analyze(pending)) ?? null;
   const seq = buildSeq;
-  const matrix = mulMat3(manual, orientations[orientIdx].matrix);
-  const m = mesh;
+  const job = assembly();
   let r: BuildMsg;
   try {
     r = await busy(t('busy.path'), () =>
-      run<BuildMsg>('build', { type: 'build', mesh: m, matrix, print: { ...print }, robot: structuredClone(robot), sourceName, bodies }),
+      run<BuildMsg>('build', { type: 'build', mesh: job.mesh, matrix: job.matrix, print: { ...print }, robot: job.robot, sourceName: job.name, bodies }),
     );
   } catch (e) {
     if (!(e instanceof Superseded) && seq === buildSeq) $('warnings').replaceChildren(li(tm(errText(e))));
     return null;
   }
-  if (m !== mesh || seq !== buildSeq) return null;
+  if (seq !== buildSeq) return null;
+  assemblyNotes = job.notes;
   lastSrc = r.src;
   currentMeta = r.meta;
   lastBuild = r;
@@ -711,7 +970,7 @@ viewer
   .then(({ parts, bin }) => {
     bodies = cellBodies(parts, bin, robot.toolData.slice(0, 3) as [number, number, number]);
     showRobot(robotPose);
-    if (!mesh) viewer.fit();
+    if (!hasParts()) viewer.fit();
     else buildSoon(); // a result computed before the cell was loaded had no collision check
   })
   .catch(() => setNotes([], msg('e.cell')));
@@ -732,7 +991,9 @@ $('startBtn').onclick = () => setPick('start');
 viewer.onPick = (mode, x, y) => {
   if (mode === 'place') {
     Object.assign(robot, { placement: 'origin', originX: Math.round(x), originY: Math.round(y) });
-    save('gb.robot', robot);
+    const p = cur();
+    if (p) Object.assign(p, { x: robot.originX, y: robot.originY });
+    saveRobot();
     renderRobotFields();
   } else {
     Object.assign(print, { startMode: 'point', startX: Math.round(x), startY: Math.round(y) });
@@ -749,7 +1010,8 @@ function fmtTime(sec: number) {
   return h ? `${h} h ${m} min` : `${m} min`;
 }
 
-function renderStats(r: BuildMsg) {
+/** The figures of the result, shown in step 5 and in the report: [label, value, wide]. */
+function statsItems(r: BuildMsg): [string, string, boolean?][] {
   const tp = r.meta;
   const seconds = (tp.printLength + tp.travelLength) / (robot.velCP * 1000) + tp.travels * robot.extruderDelay;
   const kb = new Blob([r.src]).size / 1024;
@@ -778,8 +1040,13 @@ function renderStats(r: BuildMsg) {
       : []),
     [t('r.material'), `${((tp.printLength * print.layerHeight * print.wallSpacing) / 1e6).toFixed(2)} L`],
   ];
+  return items;
+}
+
+function renderStats(r: BuildMsg) {
+  const tp = r.meta;
   $('stats').replaceChildren(
-    ...items.map(([k, v, wide]) => {
+    ...statsItems(r).map(([k, v, wide]) => {
       const d = document.createElement('div');
       d.className = 'stat' + (wide ? ' wide' : '');
       const val = Object.assign(document.createElement('div'), { className: 'v' + (wide ? ' small' : ''), textContent: v });
@@ -788,7 +1055,7 @@ function renderStats(r: BuildMsg) {
       return d;
     }),
   );
-  $('warnings').replaceChildren(...r.errors.map((w) => li(tm(w), 'blocked')), ...tp.warnings.map((w) => li(tm(w))));
+  $('warnings').replaceChildren(...r.errors.map((w) => li(tm(w), 'blocked')), ...[...assemblyNotes, ...tp.warnings].map((w) => li(tm(w))));
   updateExport();
 }
 
@@ -828,6 +1095,7 @@ function updateExport() {
   const ready = !!lastSrc && !!lastBuild && fieldErrors.size === 0;
   const blocks = exportBlocks();
   $<HTMLButtonElement>('download').disabled = !ready || blocks.length > 0;
+  $<HTMLButtonElement>('reportBtn').disabled = !ready;
   $('offBedRow').hidden = !(ready && lastBuild!.offBed);
   $('supportRow').hidden = !(ready && lastBuild!.support);
   if (lastBuild?.support) $('supportLabel').textContent = t('out.supportConfirm', { n: lastBuild.support.islands, p: lastBuild.support.overhang });
@@ -835,7 +1103,7 @@ function updateExport() {
   if (lastBuild) $('tiltLabel').textContent = t('out.tiltConfirm', { n: lastBuild.meta.tiltX ?? 0 });
   const fields = [...fieldErrors].map((k) => li(t('v.field', { field: `f.${k.split('.')[0]}` }), 'blocked'));
   if (settingsErrors.length) fields.push(li(t('out.blockedParams'), 'blocked'));
-  $('exportState').replaceChildren(...fields, ...(ready ? blocks.map((b) => li(b, 'blocked')) : mesh && !fields.length ? [li(t('out.stale'))] : []));
+  $('exportState').replaceChildren(...fields, ...(ready ? blocks.map((b) => li(b, 'blocked')) : hasParts() && !fields.length ? [li(t('out.stale'))] : []));
 }
 
 offBedOk.addEventListener('change', updateExport);
@@ -855,6 +1123,88 @@ function showPreview() {
   $('srcPreview').textContent =
     lines.length > 140 ? [...lines.slice(0, 110), `; … ${lines.length - 134} righe …`, ...lines.slice(-24)].join('\n') : lines.join('\n');
 }
+// ---------- printable report (save as PDF from the print dialog) ----------
+
+/** Every check with its outcome, for the report: [what, ok / confirmed / failed]. */
+function reportChecks(r: BuildMsg): [string, 'ok' | 'confirmed' | 'bad'][] {
+  const keys = new Set(r.errors.map((e) => e.k));
+  const ok = (b: boolean) => (b ? 'ok' : 'bad') as 'ok' | 'bad';
+  const conf = (needed: boolean, given: boolean) => (!needed ? 'ok' : given ? 'confirmed' : 'bad') as 'ok' | 'confirmed' | 'bad';
+  return [
+    [t('rep.c.params'), ok(!settingsErrors.length && !fieldErrors.size)],
+    [t('rep.c.reach'), ok(!r.reach.unreachable && !r.reach.outOfLimits)],
+    [t('rep.c.table'), ok(!keys.has('v.belowTable'))],
+    [t('rep.c.collision'), ok(!!r.collision && !r.collision.count)],
+    [t('rep.c.ptp'), ok(!!r.collision && !r.collision.ptp.length)],
+    [t('rep.c.bed'), conf(r.offBed, offBedOk.checked)],
+    [t('rep.c.support'), conf(!!r.support, supportOk.checked)],
+    [t('rep.c.tilt'), conf(tiltNeedsConfirm(), tiltOk.checked)],
+  ];
+}
+
+function openReport() {
+  const r = lastBuild;
+  if (!r || !lastSrc) return;
+  const w = window.open('', '_blank');
+  if (!w) return;
+  const e = escapeHtml;
+  const img = viewer.snapshot();
+  const mark = { ok: '✓', confirmed: '✓*', bad: '✗' };
+  const rows = (items: [string, string][]) => items.map(([k, v]) => `<tr><th>${e(k)}</th><td>${e(v).replace(/\n/g, '<br>')}</td></tr>`).join('');
+  const partRows = parts.map((p) => {
+    const s = meshStats(p.mesh).size.map((v) => v.toFixed(0)).join(' × ');
+    const o = p.orientations[p.orientIdx];
+    const where = robot.placement === 'file' ? t('rep.fromFile') : `X ${p.x} · Y ${p.y} · ${p.rotZ}°`;
+    return `<tr><th>${e(p.name)}</th><td>${e(s)} mm · ${e(o ? tm(o.label) : '')} · ${e(where)}</td></tr>`;
+  });
+  const settings: [string, string][] = [
+    [t('f.mode'), t(`r.mode.${r.meta.mode}`)],
+    [t('f.layerHeight'), `${print.layerHeight}`],
+    [t('f.wallSpacing'), `${print.wallSpacing}`],
+    [t('f.walls'), `${print.walls}`],
+    ['$VEL.CP', `${robot.velCP} m/s`],
+    ['TOOL / BASE', `TOOL_DATA[${robot.toolNumber}] · BASE_DATA[${robot.baseNumber}]`],
+    [t('f.linApprox'), robot.linApprox === 'none' ? t('approx.none') : t('approx.cdis')],
+  ];
+  const warnings = [...r.errors, ...assemblyNotes, ...r.meta.warnings].map((m) => `<li>${e(tm(m))}</li>`).join('');
+  const checks = reportChecks(r)
+    .map(([k, v]) => `<li class="${v}"><b>${mark[v]}</b> ${e(k)}</li>`)
+    .join('');
+  const name = sanitizeProgramName(robot.programName);
+  w.document.write(`<!doctype html><html lang="${getLang()}"><head><meta charset="utf-8"><title>${e(name)} — KinePath</title>
+<style>
+body{font:13px/1.45 system-ui,-apple-system,'Segoe UI',sans-serif;color:#16202b;margin:24px;}
+h1{font-size:20px;margin:0}h2{font-size:14px;margin:18px 0 6px;border-bottom:1px solid #dde2e8;padding-bottom:3px}
+.sub{color:#5f6d7b;margin:2px 0 12px}img{width:100%;max-height:340px;object-fit:contain;background:#12161c;border-radius:6px}
+table{border-collapse:collapse;width:100%}th,td{text-align:left;vertical-align:top;padding:3px 8px 3px 0;border-bottom:1px solid #eef1f4}th{width:34%;font-weight:600}
+ul{margin:0;padding-left:18px}.checks{list-style:none;padding:0;columns:2}.checks li{margin:2px 0}.ok b{color:#1f9d73}.confirmed b{color:#a15c00}.bad b{color:#c0264a}
+.note{color:#5f6d7b;font-size:11px;margin-top:4px}@media print{body{margin:12mm}h2{break-after:avoid}}
+</style></head><body>
+<h1>${e(name)}.src</h1>
+<p class="sub">${e(t('rep.subtitle', { date: new Date().toLocaleString(locale()) }))}</p>
+<img src="${img}" alt="">
+<h2>${e(t('rep.parts'))}</h2><table>${partRows.join('')}</table>
+<h2>${e(t('rep.checks'))}</h2><ul class="checks">${checks}</ul>
+<p class="note">${e(t('rep.confirmedNote'))}</p>
+<h2>${e(t('rep.result'))}</h2><table>${rows(statsItems(r).map(([k, v]) => [k, v]))}</table>
+<h2>${e(t('rep.settings'))}</h2><table>${rows(settings)}</table>
+${warnings ? `<h2>${e(t('rep.warnings'))}</h2><ul>${warnings}</ul>` : ''}
+<p class="note">${e(t('rep.dry'))}</p>
+</body></html>`);
+  w.document.close();
+  // The print dialog (where "Save as PDF" is) opens once the image is laid out.
+  let printed = false;
+  const go = () => {
+    if (printed) return;
+    printed = true;
+    w.focus();
+    w.print();
+  };
+  w.onload = go;
+  setTimeout(go, 600);
+}
+$('reportBtn').onclick = openReport;
+
 $('previewBtn').onclick = () => {
   const pre = $('srcPreview');
   pre.hidden = !pre.hidden;
@@ -868,9 +1218,11 @@ function applyLanguage() {
   $('langToggle').textContent = getLang() === 'it' ? 'EN' : 'IT';
   renderPrintFields();
   renderRobotFields();
-  if (orientations.length) renderOrientations();
-  if (mesh) showModelInfo(mesh);
-  setNotes(pieceNotes, pieceError);
+  renderOrientations();
+  renderParts();
+  const p = cur();
+  if (p) showModelInfo(p);
+  setNotes(p?.notes ?? [], pieceError);
   if (lastBuild) {
     renderStats(lastBuild);
     setSimIndex(simIndex, true);

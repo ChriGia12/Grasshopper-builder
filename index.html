@@ -61,10 +61,15 @@
             <input type="file" id="file" hidden />
             <strong data-i18n="drop.title">Trascina qui il file</strong>
             <span data-i18n="drop.or">oppure clicca per sceglierlo</span>
-            <small><span data-i18n="drop.hint">Solo il pezzo, una mesh o un BREP: robot, piano e mandrino sono già nella cella.</span><br>STL · OBJ · PLY · 3DM · STEP · IGES · BREP</small>
+            <small><span data-i18n="drop.hint">Uno o più pezzi, mesh o BREP: ogni file aggiunge un pezzo. Robot, piano e mandrino sono già nella cella.</span><br>STL · OBJ · PLY · 3DM · STEP · IGES · BREP</small>
           </label>
+          <ul id="partList" class="parts" hidden></ul>
+          <div class="project-row" id="projectRow">
+            <button class="ghost small" id="openProject" data-i18n="project.open">Apri progetto</button>
+            <button class="ghost small" id="saveProject" data-i18n="project.save" disabled>Salva progetto</button>
+            <input type="file" id="projectFile" accept=".kinepath" hidden />
+          </div>
           <div id="modelInfo" class="info" hidden></div>
-          <div id="pieceName" class="piece-name" hidden></div>
           <ul id="modelNotes" class="notes"></ul>
         </section>
 
@@ -107,6 +112,7 @@
           <div class="row gap">
             <button id="download" class="primary" data-i18n="out.download">Scarica .src</button>
             <button id="previewBtn" class="ghost" data-i18n="out.preview">Anteprima codice</button>
+            <button id="reportBtn" class="ghost" data-i18n="out.report" title="Scheda riassuntiva da stampare o salvare in PDF" data-i18n-title="out.report.title">Scheda PDF</button>
           </div>
           <pre id="srcPreview" class="src-preview" hidden></pre>
         </section>
