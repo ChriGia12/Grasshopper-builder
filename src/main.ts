@@ -178,6 +178,13 @@ async function openFile(file: File) {
   save('gb.robot', robot);
   renderRobotFields();
   mesh = piece;
+  // The orientations belong to the previous part: if this analysis stops (invalid parameter), the
+  // next build must analyse the new part again instead of reusing them.
+  orientations = [];
+  orientIdx = 0;
+  manual = [...IDENTITY] as Mat3;
+  renderOrientations();
+  $('step-orient').hidden = true;
   $('pieceName').textContent = file.name;
   $('pieceName').hidden = false;
   setNotes(pieceNotes);
