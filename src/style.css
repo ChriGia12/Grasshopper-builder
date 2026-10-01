@@ -229,6 +229,15 @@ button.active { background: var(--accent); color: var(--accent-ink); border-colo
 .parts .title { flex: 1; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .parts button { padding: 0 8px; line-height: 1.6; }
 .project-row { display: flex; gap: 8px; margin-top: 10px; }
+.scale-row { display: flex; align-items: center; gap: 5px; margin-top: 10px; flex-wrap: wrap; }
+.scale-row label { font-weight: 600; margin-right: 2px; }
+.scale-row input {
+  font: inherit; font-size: 13.5px; color: var(--text); background: var(--bg);
+  border: 1px solid var(--border); border-radius: 6px; padding: 4px 6px; width: 64px;
+}
+.scale-row input:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
+.scale-row input.invalid { border-color: var(--danger); }
+.scale-row button { padding: 4px 7px; }
 
 .sim { display: flex; align-items: center; gap: 8px; flex: 1 1 100%; }
 .sim input[type='range'] { flex: 1; }

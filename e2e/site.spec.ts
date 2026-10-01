@@ -98,6 +98,17 @@ test('several parts are printed together; a part can be removed', async ({ page 
   await expect(stat(page, 'Punti LIN')).toHaveText(one);
 });
 
+test('a part drawn in metres is flagged and scaled ×1000', async ({ page }) => {
+  await addPart(page, 'metri.stl', 0.08, 0.06, 0.02);
+  await expect(page.locator('#modelNotes')).toContainText('probabilmente il file è in metri');
+  await page.locator('#scaleRow').getByRole('button', { name: '×1000' }).click();
+  await expect(page.locator('#scaleInput')).toHaveValue('1000');
+  await expect(page.locator('#modelInfo')).toContainText('80.0 × 60.0 × 20.0 mm');
+  await expect(page.locator('#modelNotes')).not.toContainText('in metri');
+  await expect(download(page)).toBeEnabled();
+  await expect(stat(page, 'Estensione')).toContainText('X -35.0 … 45.0');
+});
+
 test('the printing order of the parts can be changed', async ({ page }) => {
   await addPart(page, 'primo.stl');
   await expect(download(page)).toBeEnabled();

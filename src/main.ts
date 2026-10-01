@@ -1,7 +1,7 @@
 import './style.css';
 import { ACCEPTED, combineParts, loadModel, pickPieces, type CellRegion } from './core/loaders';
 import { sanitizeProgramName } from './core/kuka';
-import { IDENTITY, applyMatrix, computeBounds, dropToOrigin, mergeMeshes, meshStats, mulMat3, rotX, rotY, rotZ, translate, type Mat3, type MeshData } from './core/mesh';
+import { IDENTITY, applyMatrix, computeBounds, dropToOrigin, mergeMeshes, meshStats, mulMat3, rotX, rotY, rotZ, scale, translate, type Mat3, type MeshData } from './core/mesh';
 import type { OrientationCandidate } from './core/orientation';
 import { placementOffset } from './core/pipeline';
 import { FIXED_ROBOT, validateSettings } from './core/validate';
@@ -56,6 +56,10 @@ interface Part {
   notes: Msg[];
   /** Original file, kept to save the project. */
   file: { name: string; bytes: ArrayBuffer };
+  /** Geometry as read from the file, and the scale applied to it (files in metres: ×1000). */
+  original: MeshData;
+  scale: number;
+  /** The part as printed: original × scale. */
   mesh: MeshData;
   orientations: OrientationCandidate[];
   orientIdx: number;
@@ -195,12 +199,15 @@ async function readPart(name: string, bytes: ArrayBuffer): Promise<Part> {
   if (!pieces.length) throw new MsgError(note ?? msg('e.noPrintable'));
   // Ignored blocks / curves are the rest of the scene: not worth a note.
   notes.push(...model.notes.filter((n) => n.k !== 'n.blocks' && n.k !== 'n.skipped'));
+  const original = combineParts(pieces);
   return {
     name,
     format: model.format,
     notes,
     file: { name, bytes },
-    mesh: combineParts(pieces),
+    original,
+    scale: 1,
+    mesh: original,
     orientations: [],
     orientIdx: 0,
     manual: [...IDENTITY] as Mat3,
@@ -252,9 +259,63 @@ function selectPart(i: number) {
   $('step-orient').hidden = !p?.orientations.length;
   if (p) {
     showModelInfo(p);
-    setNotes(p.notes);
+    setNotes([...p.notes, ...scaleHints(p)]);
   }
+  renderScale();
 }
+
+// ---------- scale of the selected part ----------
+// Drawings sent in metres (1:1000), centimetres or inches arrive far too small: the scale
+// multiplies the geometry of the file; position and orientation of the part are kept.
+
+/** A part smaller than 2 mm or larger than 5 m is most likely in the wrong unit. */
+function scaleHints(p: Part): Msg[] {
+  const size = Math.max(...meshStats(p.mesh).size);
+  if (size < 2) return [msg('n.scaleSmall', { s: size.toFixed(3) })];
+  if (size > 5000) return [msg('n.scaleBig', { s: Math.round(size) })];
+  return [];
+}
+
+function renderScale() {
+  const p = cur();
+  $('scaleRow').hidden = !p;
+  if (!p) return;
+  const input = $<HTMLInputElement>('scaleInput');
+  input.value = String(p.scale);
+  input.classList.remove('invalid');
+}
+
+async function setScale(p: Part, s: number) {
+  if (!(s > 0) || s === p.scale) return;
+  p.scale = s;
+  p.mesh = scale(p.original, s);
+  // Keep the chosen orientation (found again by its direction) and the position.
+  p.wantDown = p.orientations[p.orientIdx]?.down;
+  p.orientations = [];
+  selectPart(parts.indexOf(p));
+  if (parts.length === 1) showFirstPart(p);
+  fitNext = true;
+  await analyze([p]);
+}
+
+$<HTMLInputElement>('scaleInput').addEventListener('change', (e) => {
+  const input = e.target as HTMLInputElement;
+  const s = parseFloat(input.value);
+  const p = cur();
+  if (!p) return;
+  if (!(s > 0)) {
+    input.classList.add('invalid');
+    return;
+  }
+  input.classList.remove('invalid');
+  setScale(p, s);
+});
+document.querySelectorAll<HTMLButtonElement>('[data-scale]').forEach((b) => {
+  b.onclick = () => {
+    const p = cur();
+    if (p) setScale(p, +b.dataset.scale!);
+  };
+});
 
 /** Back to the empty plate. */
 function clearParts() {
@@ -267,6 +328,7 @@ function clearParts() {
   $('empty').hidden = false;
   setNotes([]);
   renderParts();
+  renderScale();
   viewer.setModel(null, [0, 0, 0]);
   viewer.setToolpath(null, null, [], [0, 0, 0]);
   viewer.setZones(null, null, [0, 0, 0]);
@@ -451,7 +513,7 @@ interface ProjectFile {
   version: 1;
   print: PrintSettings;
   robot: Partial<RobotSettings>;
-  parts: { name: string; data: string; down: [number, number, number] | null; manual: Mat3; x: number; y: number; rotZ: number }[];
+  parts: { name: string; data: string; down: [number, number, number] | null; manual: Mat3; x: number; y: number; rotZ: number; scale?: number }[];
 }
 
 const toBase64 = (b: ArrayBuffer) => {
@@ -478,6 +540,7 @@ function saveProject() {
       x: p.x,
       y: p.y,
       rotZ: p.rotZ,
+      scale: p.scale,
     })),
   };
   const a = document.createElement('a');
@@ -509,6 +572,7 @@ async function openProject(f: File) {
     for (const sp of data.parts) {
       const p = await readPart(sp.name, fromBase64(sp.data));
       Object.assign(p, { manual: sp.manual, x: sp.x, y: sp.y, rotZ: sp.rotZ, placed: true, wantDown: sp.down ?? undefined });
+      if (sp.scale && sp.scale > 0 && sp.scale !== 1) Object.assign(p, { scale: sp.scale, mesh: scale(p.original, sp.scale) });
       loaded.push(p);
     }
   } catch (e) {
@@ -1257,7 +1321,8 @@ function applyLanguage() {
   renderParts();
   const p = cur();
   if (p) showModelInfo(p);
-  setNotes(p?.notes ?? [], pieceError);
+  setNotes(p ? [...p.notes, ...scaleHints(p)] : [], pieceError);
+  renderScale();
   if (lastBuild) {
     renderStats(lastBuild);
     setSimIndex(simIndex, true);
