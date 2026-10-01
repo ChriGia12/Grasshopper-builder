@@ -73,6 +73,16 @@ body {
 .brand { display: flex; align-items: center; gap: 8px; font-weight: 650; color: var(--accent); }
 .brand span { color: var(--text); }
 .tagline { color: var(--muted); font-size: 13px; }
+.browser-warn {
+  display: flex; align-items: flex-start; gap: 12px;
+  padding: 10px 16px;
+  background: var(--warn-soft); color: var(--warn);
+  border-bottom: 1px solid var(--border);
+  font-size: 13px;
+}
+.browser-warn[hidden] { display: none; }
+.browser-warn span { flex: 1; }
+.browser-warn button { color: inherit; }
 .busy { margin-left: auto; display: flex; align-items: center; gap: 8px; color: var(--muted); font-size: 13px; }
 .spinner {
   width: 14px; height: 14px; border-radius: 50%;

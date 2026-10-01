@@ -854,6 +854,7 @@ function applyLanguage() {
   }
   if (settingsErrors.length) $('warnings').replaceChildren(...settingsErrors.map((w) => li(tm(w), 'blocked')));
   $('playBtn').textContent = t(playing ? 'sim.pause' : 'sim.play');
+  window.kinepathWarn?.(true);
   updateExport();
   if (pick !== 'none') $('pickHint').textContent = pick === 'place' ? t('pick.place') : t('pick.start');
 }
@@ -862,3 +863,32 @@ $('langToggle').onclick = () => {
   applyLanguage();
 };
 applyLanguage();
+
+// ---------- browser check ----------
+// Some browsers (Brave Shields, script blockers) let the page load but stop the computation
+// worker: the site then looks dead. The warning lives in index.html so it works even without us.
+declare global {
+  interface Window {
+    kinepathStarted?: boolean;
+    kinepathWarn?: (refresh?: boolean) => void;
+  }
+}
+window.kinepathStarted = true;
+{
+  const probe = makeWorker();
+  const fail = () => {
+    probe.terminate();
+    window.kinepathWarn?.();
+  };
+  const timer = setTimeout(fail, 15000);
+  probe.onmessage = (ev) => {
+    if (ev.data?.type !== 'pong') return;
+    clearTimeout(timer);
+    probe.terminate();
+  };
+  probe.onerror = () => {
+    clearTimeout(timer);
+    fail();
+  };
+  probe.postMessage({ type: 'ping', id: 0 });
+}

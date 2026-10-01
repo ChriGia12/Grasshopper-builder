@@ -17,6 +17,41 @@
       <div id="busy" class="busy" hidden><span class="spinner"></span><span id="busyText" data-i18n="busy">Calcolo…</span></div>
       <button class="ghost small lang-toggle" id="langToggle" title="Cambia lingua del sito" data-i18n-title="lang.toggle.title">EN</button>
     </header>
+    <div id="browserWarn" class="browser-warn" role="alert" hidden>
+      <span id="browserWarnText"></span>
+      <button class="ghost small" id="browserWarnClose" aria-label="Chiudi">×</button>
+    </div>
+    <script>
+      // Plain script, independent of the app bundle: it must still work when the browser (Brave
+      // Shields, script blockers, very old versions) stops the app from starting.
+      (function () {
+        var TEXT = {
+          it: {
+            brave: 'Brave sta bloccando una parte del sito, per esempio il caricamento dei file o il calcolo del percorso. Disattiva gli Shields per questa pagina (icona del leone a destra della barra degli indirizzi) e ricarica, oppure usa un altro browser: Chrome, Edge, Firefox o Safari.',
+            other: 'Il browser sta bloccando una parte del sito, per esempio il caricamento dei file o il calcolo del percorso. Disattiva blocchi di script ed estensioni per questa pagina e ricarica, oppure usa un altro browser aggiornato: Chrome, Edge, Firefox o Safari.',
+          },
+          en: {
+            brave: 'Brave is blocking part of the site, for example file loading or the toolpath computation. Turn Shields off for this page (lion icon on the right of the address bar) and reload, or use another browser: Chrome, Edge, Firefox or Safari.',
+            other: 'The browser is blocking part of the site, for example file loading or the toolpath computation. Turn off script blockers and extensions for this page and reload, or use another up-to-date browser: Chrome, Edge, Firefox or Safari.',
+          },
+        };
+        var shown = false;
+        window.kinepathWarn = function (refresh) {
+          if (refresh && !shown) return;
+          var lang = 'it';
+          try { if (localStorage.getItem('kinepath:lang') === 'en') lang = 'en'; } catch (e) {}
+          document.getElementById('browserWarnText').textContent = TEXT[lang][navigator.brave ? 'brave' : 'other'];
+          document.getElementById('browserWarn').hidden = false;
+          shown = true;
+        };
+        document.getElementById('browserWarnClose').onclick = function () {
+          document.getElementById('browserWarn').hidden = true;
+          shown = false;
+        };
+        // The app sets kinepathStarted once its interface is wired; a blocked bundle never does.
+        setTimeout(function () { if (!window.kinepathStarted) window.kinepathWarn(); }, 8000);
+      })();
+    </script>
 
     <main class="layout">
       <aside class="panel" id="panel">

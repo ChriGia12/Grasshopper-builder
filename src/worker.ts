@@ -6,13 +6,16 @@ import type { Mat3, MeshData } from './core/mesh';
 import type { PrintSettings, RobotSettings } from './core/settings';
 
 export type WorkerRequest =
+  | { type: 'ping'; id: number }
   | { type: 'analyze'; id: number; mesh: MeshData; print: PrintSettings }
   | { type: 'build'; id: number; mesh: MeshData; matrix: Mat3; print: PrintSettings; robot: RobotSettings; sourceName: string };
 
 self.onmessage = (ev: MessageEvent<WorkerRequest>) => {
   const req = ev.data;
   try {
-    if (req.type === 'analyze') {
+    if (req.type === 'ping') {
+      self.postMessage({ type: 'pong', id: req.id });
+    } else if (req.type === 'analyze') {
       const orientations = analyzeOrientations(req.mesh, req.print.overhangAngle, req.print.layerHeight, req.print.thinWallMax);
       self.postMessage({ type: 'analyze', id: req.id, orientations });
     } else {
