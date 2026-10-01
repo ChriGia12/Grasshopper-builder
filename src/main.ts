@@ -282,6 +282,18 @@ function removePart(i: number) {
   build();
 }
 
+/** Printing order: move part i one place earlier (−1) or later (+1). */
+function movePart(i: number, d: -1 | 1) {
+  const j = i + d;
+  if (j < 0 || j >= parts.length) return;
+  [parts[i], parts[j]] = [parts[j], parts[i]];
+  if (active === i) active = j;
+  else if (active === j) active = i;
+  renderParts();
+  saveRobot(); // the remembered position is the first part's
+  build();
+}
+
 function renderParts() {
   $('partList').hidden = !hasParts();
   $<HTMLButtonElement>('saveProject').disabled = !hasParts();
@@ -289,14 +301,19 @@ function renderParts() {
     ...parts.map((p, i) => {
       const item = document.createElement('li');
       item.className = i === active ? 'sel' : '';
-      const name = Object.assign(document.createElement('span'), { className: 'title', textContent: p.name });
-      const del = Object.assign(document.createElement('button'), { className: 'ghost small', textContent: '×', title: t('parts.remove') });
-      del.setAttribute('aria-label', t('parts.remove'));
-      del.onclick = (e) => {
-        e.stopPropagation();
-        removePart(i);
+      // With several parts the number is the printing order.
+      const name = Object.assign(document.createElement('span'), { className: 'title', textContent: parts.length > 1 ? `${i + 1}. ${p.name}` : p.name });
+      const button = (text: string, title: string, run: () => void, disabled = false) => {
+        const b = Object.assign(document.createElement('button'), { className: 'ghost small', textContent: text, title, disabled });
+        b.setAttribute('aria-label', title);
+        b.onclick = (e) => {
+          e.stopPropagation();
+          run();
+        };
+        return b;
       };
-      item.append(name, del);
+      const tools = parts.length > 1 ? [button('↑', t('parts.up'), () => movePart(i, -1), i === 0), button('↓', t('parts.down'), () => movePart(i, 1), i === parts.length - 1)] : [];
+      item.append(name, ...tools, button('×', t('parts.remove'), () => removePart(i)));
       item.onclick = () => selectPart(i);
       return item;
     }),

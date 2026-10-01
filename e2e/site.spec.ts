@@ -92,10 +92,28 @@ test('several parts are printed together; a part can be removed', async ({ page 
   await expect(stat(page, 'Punti LIN')).not.toHaveText(one);
   const two = Number((await stat(page, 'Punti LIN').innerText()).replace(/\D/g, ''));
   expect(two).toBeGreaterThan(Number(one.replace(/\D/g, '')));
-  await page.locator('#partList li').nth(1).getByRole('button').click();
+  await page.locator('#partList li').nth(1).getByRole('button', { name: 'Togli questo pezzo' }).click();
   await expect(page.locator('#partList li')).toHaveCount(1);
   await expect(download(page)).toBeEnabled();
   await expect(stat(page, 'Punti LIN')).toHaveText(one);
+});
+
+test('the printing order of the parts can be changed', async ({ page }) => {
+  await addPart(page, 'primo.stl');
+  await expect(download(page)).toBeEnabled();
+  await addPart(page, 'secondo.stl', 40, 40, 20);
+  await expect(download(page)).toBeEnabled();
+  const firstLin = async () => {
+    const [dl] = await Promise.all([page.waitForEvent('download'), download(page).click()]);
+    return readFileSync((await dl.path())!, 'utf8').match(/^PTP \{X[^}]*\}/m)![0];
+  };
+  const before = await firstLin();
+  await expect(page.locator('#partList li .title')).toHaveText(['1. primo.stl', '2. secondo.stl']);
+  await page.locator('#partList li').nth(1).getByRole('button', { name: /Stampa prima/ }).click();
+  await expect(page.locator('#partList li .title')).toHaveText(['1. secondo.stl', '2. primo.stl']);
+  await expect(download(page)).toBeEnabled();
+  // the program now starts on the other part
+  expect(await firstLin()).not.toBe(before);
 });
 
 test('a saved project opens again exactly as it was', async ({ page }) => {

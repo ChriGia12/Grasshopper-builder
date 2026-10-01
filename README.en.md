@@ -50,7 +50,7 @@ The robot stands in the Rhino world at (0, −1000, 0): the point drawn in `BASE
 
 ## Quick start
 
-1. **Load the part**: a mesh or a BREP. Every file adds a part to the list: the parts are printed one after the other, in the order of the list, each with its own orientation and position (a new part goes beside the others, 70 mm apart, the room the spindle needs to pass beside a finished part; overlapping parts are reported). Click a part in the list to edit it, × to remove it. From a `.3dm` with the whole scene only the object standing on the work table is used.
+1. **Load the part**: a mesh or a BREP. Every file adds a part to the list: the parts are printed one after the other, in the order of the list, each with its own orientation and position (a new part goes beside the others, 70 mm apart, the room the spindle needs to pass beside a finished part; overlapping parts are reported). Click a part in the list to edit it, ↑ ↓ to change the printing order, × to remove it. From a `.3dm` with the whole scene only the object standing on the work table is used.
 2. The site proposes the best orientation of the selected part (Orientation section); choose the print mode in *Printing*.
 3. **Place part**: click on the plate in the view to move the centre of the selected part; the rotation on the table is in *KUKA robot and table → Part rotation Z*.
 4. **Start point**: click near the contour where printing should start (light blue dot).
