@@ -50,13 +50,13 @@ The robot stands in the Rhino world at (0, −1000, 0): the point drawn in `BASE
 
 ## Quick start
 
-1. **Load the part**: a mesh or a BREP. Every file adds a part to the list: the parts are printed together, layer by layer, each with its own orientation and position (a new part goes beside the others; overlapping parts are reported). Click a part in the list to edit it, × to remove it. From a `.3dm` with the whole scene only the object standing on the work table is used.
+1. **Load the part**: a mesh or a BREP. Every file adds a part to the list: the parts are printed one after the other, in the order of the list, each with its own orientation and position (a new part goes beside the others, 70 mm apart, the room the spindle needs to pass beside a finished part; overlapping parts are reported). Click a part in the list to edit it, × to remove it. From a `.3dm` with the whole scene only the object standing on the work table is used.
 2. The site proposes the best orientation of the selected part (Orientation section); choose the print mode in *Printing*.
 3. **Place part**: click on the plate in the view to move the centre of the selected part; the rotation on the table is in *KUKA robot and table → Part rotation Z*.
 4. **Start point**: click near the contour where printing should start (light blue dot).
 5. **Download .src**. **PDF sheet** opens a summary sheet (image, parts, outcome of every check, result, settings) to print or save as PDF.
 
-**Change of part.** With several parts, when the path goes from one part to the next the site switches the extruder off, goes straight up with a LIN without blending to 30 mm above what is already printed, moves above the next part with a `PTP` and goes down with a LIN where printing resumes (extruder on again). These PTPs go through the collision check as well, with the controller's axis interpolation.
+**Change of part.** With several parts, once a part is finished the site switches the extruder off, goes straight up with a LIN without blending to 30 mm above what is already printed, moves above the next part with a `PTP` and goes down with a LIN where printing resumes (extruder on again). These PTPs go through the collision check as well, with the controller's axis interpolation.
 
 **Projects.** *Save project* downloads a `.kinepath` file with the original files of the parts, their orientation and position and all the settings; *Open project* (or dropping the file on the upload area) brings the site back to exactly that state.
 

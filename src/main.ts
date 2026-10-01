@@ -330,14 +330,20 @@ function plannedSize(p: Part): [number, number] {
   return [b.max[0] - b.min[0], b.max[1] - b.min[1]];
 }
 
-/** A new part goes beside the others along Y (the long side of the plate), 20 mm apart. */
+/**
+ * Room between two parts: printing the second one, the mandrino (55 mm around the nozzle) must
+ * pass beside the first, already finished. The collision check confirms it for the real heights.
+ */
+const PART_GAP = 70;
+
+/** A new part goes beside the others along Y (the long side of the plate), PART_GAP apart. */
 function placeNewPart(p: Part) {
   p.placed = true;
   const others = parts.filter((q) => q !== p && q.placed && q.orientations.length);
   if (!others.length) return;
   const edge = Math.max(...others.map((q) => q.y + plannedSize(q)[1] / 2));
   p.x = others[0].x;
-  p.y = Math.round(edge + 20 + plannedSize(p)[1] / 2);
+  p.y = Math.round(edge + PART_GAP + plannedSize(p)[1] / 2);
 }
 
 /** Analyse the orientations of some parts (all by default), then compute the path. */
@@ -860,8 +866,18 @@ function updateLayerLabel() {
   if (!currentMeta) return;
   const i = +$<HTMLInputElement>('layerSlider').value;
   const n = currentMeta.layerStart.length;
-  // Z of the layer in BASE (table top + nozzle height); the surface mode follows the part instead.
-  const z = (lastBuild?.offset[2] ?? 0) + print.firstLayerZ + i * currentMeta.layerHeight;
+  // Z of the layer in BASE: height of its first printed point (with several parts printed one
+  // after the other the layer numbers run on, the heights start again from the table).
+  let z = (lastBuild?.offset[2] ?? 0) + print.firstLayerZ + i * currentMeta.layerHeight;
+  const r = lastBuild;
+  if (r) {
+    const end = i + 1 < n ? currentMeta.layerStart[i + 1] : r.xyz.length / 3;
+    for (let k = currentMeta.layerStart[i]; k < end; k++)
+      if (r.ext[k]) {
+        z = r.xyz[k * 3 + 2] + r.offset[2];
+        break;
+      }
+  }
   const blended = currentMeta.planarLayers !== undefined && i >= currentMeta.planarLayers;
   $('layerOut').textContent =
     currentMeta.mode === 'surface'

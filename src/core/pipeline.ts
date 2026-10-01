@@ -7,7 +7,7 @@ import type { PrintSettings, RobotSettings } from './settings';
 import { reachReport, type ReachReport } from './robot';
 import { buildToolpath, sliceForPrint, type Toolpath } from './toolpath';
 import { riskZones, type Zones } from './zones';
-import { separateParts, type PartBox } from './parts';
+import { printPartsInTurn, type PartBox } from './parts';
 import { evaluateOrientation, OVERHANG_LIMIT, supportOk } from './orientation';
 import { collisionReport, type Body, type CollisionReport } from './collision';
 
@@ -54,7 +54,7 @@ export function runBuild(
   sourceName: string,
   /** Sampled arm and mandrino (collision.ts cellBodies); without them no collision check. */
   bodies?: Body[],
-  /** Several parts: their footprints in BASE, to move between them with a PTP. */
+  /** Several parts: their footprints in BASE, in printing order (one part after the other). */
   partBoxes?: PartBox[],
 ): BuildResult {
   // Parameters are checked before any geometry: an out-of-range value (e.g. thousands of passes)
@@ -66,9 +66,9 @@ export function runBuild(
   const start: [number, number] | undefined =
     print.startMode === 'point' ? [print.startX - offset[0], print.startY - offset[1]] : undefined;
   const summary = print.mode === 'surface' ? undefined : sliceForPrint(mesh, print);
-  const toolpath = buildToolpath(mesh, print, summary, start);
+  // Several parts: one after the other, each one whole (parts.ts).
+  const toolpath = partBoxes && partBoxes.length > 1 ? printPartsInTurn(mesh, print, partBoxes, offset, start) : buildToolpath(mesh, print, summary, start);
   const zones = riskZones(mesh, summary?.layers ?? null, print);
-  if (partBoxes) toolpath.partChanges = separateParts(toolpath, offset, partBoxes, print);
   const placed: RobotSettings = { ...robot, originX: offset[0], originY: offset[1], originZ: offset[2] };
   const src = writeKukaSrc(toolpath, placed, { sourceName, layerHeight: print.layerHeight });
 

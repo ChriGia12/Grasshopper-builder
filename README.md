@@ -50,13 +50,13 @@ Il robot sta nel mondo Rhino a (0, −1000, 0): il punto disegnato in `BASE ROBO
 
 ## Uso rapido
 
-1. **Carica il pezzo**: una mesh o un BREP. Ogni file aggiunge un pezzo alla lista: i pezzi vengono stampati insieme, strato per strato, ognuno con il suo orientamento e la sua posizione (un nuovo pezzo si mette accanto agli altri; se due pezzi si sovrappongono compare un avviso). Clic su un pezzo della lista per modificarlo, × per toglierlo. Da un `.3dm` con tutta la scena viene preso solo l'oggetto che sta sul piano di lavoro.
+1. **Carica il pezzo**: una mesh o un BREP. Ogni file aggiunge un pezzo alla lista: i pezzi vengono stampati uno dopo l'altro, nell'ordine della lista, ognuno con il suo orientamento e la sua posizione (un nuovo pezzo si mette accanto agli altri a 70 mm, lo spazio per far passare il mandrino accanto a un pezzo già finito; se due pezzi si sovrappongono compare un avviso). Clic su un pezzo della lista per modificarlo, × per toglierlo. Da un `.3dm` con tutta la scena viene preso solo l'oggetto che sta sul piano di lavoro.
 2. Il sito propone l'orientamento migliore del pezzo selezionato (sezione Orientamento); scegli il modo di stampa in *Stampa*.
 3. **Posiziona pezzo**: clicca sulla lastra nell'anteprima per spostare il centro del pezzo selezionato; la rotazione sul piano è in *Robot KUKA e piano → Rotazione pezzo Z*.
 4. **Punto iniziale**: clicca vicino al contorno dove vuoi che parta la stampa (punto azzurro).
 5. **Scarica .src**. **Scheda PDF** apre una scheda riassuntiva (immagine, pezzi, esito di tutti i controlli, risultato, impostazioni) da stampare o salvare in PDF.
 
-**Cambio pezzo.** Con più pezzi, quando il percorso passa da un pezzo all'altro il sito spegne l'estrusore, sale in verticale con un LIN senza raccordo fino a 30 mm sopra quanto già stampato, si sposta sopra il pezzo successivo con un `PTP` e scende con un LIN dove la stampa riprende (estrusore riacceso). Anche questi PTP passano dal controllo collisioni, con l'interpolazione degli assi del controller.
+**Cambio pezzo.** Con più pezzi, finito un pezzo il sito spegne l'estrusore, sale in verticale con un LIN senza raccordo fino a 30 mm sopra quanto già stampato, si sposta sopra il pezzo successivo con un `PTP` e scende con un LIN dove la stampa riprende (estrusore riacceso). Anche questi PTP passano dal controllo collisioni, con l'interpolazione degli assi del controller.
 
 **Progetti.** *Salva progetto* scarica un file `.kinepath` con i file originali dei pezzi, il loro orientamento e la posizione e tutte le impostazioni; *Apri progetto* (o trascinare il file sulla zona di caricamento) riporta il sito esattamente a quello stato.
 

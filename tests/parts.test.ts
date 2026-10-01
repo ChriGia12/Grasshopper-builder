@@ -1,4 +1,5 @@
-// Several parts: from one part to the next the extruder stops and the robot moves with a PTP.
+// Several parts are printed one after the other; between two parts the extruder stops, the robot
+// goes up, moves with a PTP above the next part, comes down and switches the extruder on again.
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import { runBuild } from '../src/core/pipeline';
@@ -14,47 +15,55 @@ const bodies = cellBodies(header.parts, cell.buffer.slice(cell.byteOffset, cell.
 const I = [...IDENTITY] as Mat3;
 const print = { ...DEFAULT_PRINT, layerHeight: 2 };
 
-// Two blocks 60 mm apart along Y; the build centres the pair on (5, 515) in BASE.
-const pair = weld(mergeMeshes([box(50, 40, 10), box(50, 40, 10, 0, 100, 0)]));
+// Two blocks 70 mm apart along Y; the build centres the pair on (5, 515) in BASE.
+const pair = weld(mergeMeshes([box(50, 40, 10), box(50, 40, 10, 0, 110, 0)]));
 const robot = { ...DEFAULT_ROBOT, originX: 5, originY: 515 };
-// mesh spans x 0…50, y 0…140 → BASE x −20…30, y 445…585
+// mesh spans x 0…50, y 0…150 → BASE x −20…30, y 440…590
 const boxes: PartBox[] = [
-  [-20, 445, 30, 485],
-  [-20, 545, 30, 585],
+  [-20, 440, 30, 480],
+  [-20, 550, 30, 590],
 ];
 
-describe('change of part', () => {
+describe('several parts, one after the other', () => {
   const r = runBuild(pair, I, print, robot, 't', bodies, boxes);
   const pts = r.toolpath.points;
+  const partOf = (y: number) => (y + r.offset[1] < 515 ? 0 : 1);
 
-  it('every move between the two parts is a PTP above them, with the extruder off', () => {
-    const changes = r.toolpath.partChanges!;
-    expect(changes).toBeGreaterThanOrEqual(r.toolpath.layerCount - 1); // about one per layer
-    const ptp = pts.flatMap((p, i) => (p.ptp ? [i] : []));
-    expect(ptp.length).toBe(changes);
-    for (const i of ptp) {
-      const [from, up, over, down] = [pts[i - 2], pts[i - 1], pts[i], pts[i + 1]];
-      expect(from.e).toBe(true);
-      expect([up.e, over.e, down.e]).toEqual([false, false, false]);
-      expect(over.z).toBeGreaterThanOrEqual(from.z + PART_CHANGE_CLEARANCE - 1e-6); // above what is printed
-      expect([up.x, up.y, up.z]).toEqual([from.x, from.y, over.z]); // straight up…
-      expect([down.x, down.y]).toEqual([over.x, over.y]); // …across with the PTP, straight down
-    }
+  it('the first part is printed whole, then the second', () => {
+    const order = pts.filter((p) => p.e).map((p) => partOf(p.y));
+    const firstOfSecond = order.indexOf(1);
+    expect(firstOfSecond).toBeGreaterThan(0);
+    expect(order.slice(0, firstOfSecond).every((k) => k === 0)).toBe(true);
+    expect(order.slice(firstOfSecond).every((k) => k === 1)).toBe(true);
+    expect(r.toolpath.layerCount).toBe(10); // 5 layers each
   });
 
-  it('no extruded move goes from one part to the other', () => {
-    const partOf = (y: number) => (y + r.offset[1] < 515 ? 0 : 1);
-    for (let i = 1; i < pts.length; i++) if (pts[i].e) expect(partOf(pts[i].y)).toBe(partOf(pts[i - 1].y));
+  it('one change of part: up, PTP above the next part, down, then printing again', () => {
+    expect(r.toolpath.partChanges).toBe(1);
+    const i = pts.findIndex((p) => p.ptp);
+    const [from, up, over, down] = [pts[i - 2], pts[i - 1], pts[i], pts[i + 1]];
+    expect(from.e).toBe(true);
+    expect([up.e, over.e, down.e]).toEqual([false, false, false]);
+    expect(over.z).toBeGreaterThanOrEqual(Math.max(...pts.slice(0, i).filter((p) => p.e).map((p) => p.z)) + PART_CHANGE_CLEARANCE - 1e-6);
+    expect([up.x, up.y, up.z]).toEqual([from.x, from.y, over.z]); // straight up…
+    expect([down.x, down.y]).toEqual([over.x, over.y]); // …across with the PTP, straight down
+    expect(partOf(down.y)).toBe(1);
+    expect(pts.slice(i + 2).find((p) => p.e)).toBeDefined(); // printing goes on on the second part
   });
 
-  it('the .src switches the extruder off and moves with PTP between the parts', () => {
+  it('the .src switches the extruder off before and on again after the PTP', () => {
     const lines = r.src.split('\r\n');
-    // Cartesian PTPs: the one to the first point + one per change of part (safe and homing PTPs are axis PTPs)
-    const ptpLines = lines.flatMap((l, i) => (l.startsWith('PTP {X') ? [i] : []));
-    expect(ptpLines.length).toBe(1 + r.toolpath.partChanges!);
-    for (const i of ptpLines.slice(1)) expect(lines.slice(Math.max(0, i - 6), i).join('\n')).toContain('$OUT[16]=FALSE');
-    // the lift before each PTP stops exactly: no C_DIS, the arm is up before it swings
-    for (const i of ptpLines.slice(1)) expect(lines[i - 1]).toMatch(/^LIN \{.*\}$/);
+    // Cartesian PTPs: the one to the first point + the change of part (safe and homing PTPs are axis PTPs)
+    const ptpLines = lines.flatMap((l, k) => (l.startsWith('PTP {X') ? [k] : []));
+    expect(ptpLines.length).toBe(2);
+    const k = ptpLines[1];
+    expect(lines.slice(k - 6, k).join('\n')).toContain('$OUT[16]=FALSE');
+    expect(lines[k - 1]).toMatch(/^LIN \{.*\}$/); // lift with exact stop: up before swinging across
+    expect(lines[k + 1]).toMatch(/^LIN \{/); // down onto the second part
+    const after = lines.slice(k + 2, k + 14).join('\n');
+    expect(after).toContain('RIACCENSIONE ESTRUSORE');
+    expect(after).toContain('$OUT[16]=TRUE');
+    expect(after.indexOf('$OUT[16]=TRUE')).toBeLessThan(after.indexOf('\nLIN {'));
   });
 
   it('the moves are reachable and free of collisions', () => {
