@@ -13,6 +13,7 @@ interface Rule {
 /** Admitted ranges (mm, deg, s, m/s). */
 export const PRINT_RULES: Partial<Record<keyof PrintSettings, Rule>> = {
   layerHeight: { min: 0.1, max: 20 },
+  minLayerHeight: { min: 0.1, max: 20 },
   firstLayerZ: { min: 0, max: 20 },
   walls: { min: 1, max: 20, int: true },
   wallSpacing: { min: 0.5, max: 50 },
@@ -68,6 +69,8 @@ export function validateSettings(print: PrintSettings, robot: RobotSettings): Ms
   // 0 = off; a tiny split length would turn every contour into millions of LIN points.
   if (print.maxSegment > 0 && print.maxSegment < 1)
     out.push(msg('v.range', { field: 'f.maxSegment', v: String(print.maxSegment), min: 1, max: PRINT_RULES.maxSegment!.max }));
+  if (print.adaptiveLayers && print.minLayerHeight > print.layerHeight)
+    out.push(msg('v.minLayer', { min: print.minLayerHeight, h: print.layerHeight }));
   if (robot.extruderAnout === robot.extruderSpeedAnout) out.push(msg('v.sameAnout'));
   if (!/^[A-Za-z][A-Za-z0-9_]{0,23}$/.test(robot.programName.replace(/\.[^.]*$/, '').replace(/[^A-Za-z0-9_]/g, '_')))
     out.push(msg('v.programName'));

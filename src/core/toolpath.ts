@@ -53,15 +53,69 @@ export interface LayerSummary {
   emptyLayers: number;
 }
 
-/** Contour taken at mid-bead height (i + ½)·h; nozzle at firstLayerZ + i·h above the table. */
-export function sliceForPrint(mesh: MeshData, s: PrintSettings): LayerSummary {
+const FLAT = Math.sin((2 * Math.PI) / 180); // faces within 2° of horizontal
+
+/**
+ * Layers as [bottom, thickness] from the table. Uniform: n layers of layerHeight. Adaptive
+ * (contour layers only): where the surface is shallow the step in Z shrinks, so that consecutive
+ * curves stay layerHeight apart along the surface: Δz = layerHeight · sin(slope), never below
+ * minLayerHeight. The slope comes from the triangles crossing the layer (0.05 mm buckets).
+ */
+export function layerStack(mesh: MeshData, s: PrintSettings): [number, number][] {
   const b = computeBounds(mesh);
   const height = b.max[2] - b.min[2];
-  const n = Math.max(1, Math.round(height / s.layerHeight));
-  const zs = Array.from({ length: n }, (_, i) => b.min[2] + (i + 0.5) * s.layerHeight);
+  const h = s.layerHeight;
+  if (!(s.adaptiveLayers && s.mode === 'planar')) {
+    const n = Math.max(1, Math.round(height / h));
+    return Array.from({ length: n }, (_, i) => [i * h, h]);
+  }
+  const step = 0.05;
+  const buckets = new Float32Array(Math.ceil(height / step) + 2).fill(1);
+  const p = mesh.positions;
+  const ix = mesh.indices;
+  for (let t = 0; t < ix.length; t += 3) {
+    const [a, c, d] = [ix[t] * 3, ix[t + 1] * 3, ix[t + 2] * 3];
+    const ux = p[c] - p[a], uy = p[c + 1] - p[a + 1], uz = p[c + 2] - p[a + 2];
+    const vx = p[d] - p[a], vy = p[d + 1] - p[a + 1], vz = p[d + 2] - p[a + 2];
+    const nx = uy * vz - uz * vy;
+    const ny = uz * vx - ux * vz;
+    const nz = ux * vy - uy * vx;
+    const len = Math.hypot(nx, ny, nz);
+    if (!len) continue;
+    const sin = Math.sqrt(Math.max(0, 1 - (nz / len) ** 2)); // slope of the face from horizontal
+    // Flat faces (bottom, lids, decks) are where a curve starts or ends, not a surface to follow.
+    if (sin < FLAT) continue;
+    const z0 = Math.min(p[a + 2], p[c + 2], p[d + 2]) - b.min[2];
+    const z1 = Math.max(p[a + 2], p[c + 2], p[d + 2]) - b.min[2];
+    for (let k = Math.floor(z0 / step); k <= Math.floor(z1 / step); k++) if (sin < buckets[k]) buckets[k] = sin;
+  }
+  const minSin = (from: number, to: number) => {
+    let m = 1;
+    for (let k = Math.floor(from / step); k <= Math.min(buckets.length - 1, Math.floor(to / step)); k++) m = Math.min(m, buckets[k]);
+    return m;
+  };
+  const lo = Math.min(s.minLayerHeight, h);
+  const out: [number, number][] = [];
+  for (let z = 0; z < height - lo / 2; ) {
+    let dz = h;
+    for (let k = 0; k < 3; k++) dz = Math.max(lo, Math.min(h, h * minSin(z, z + dz)));
+    out.push([z, dz]);
+    z += dz;
+  }
+  return out.length ? out : [[0, h]];
+}
+
+/**
+ * Contour taken at mid-bead height; nozzle firstLayerZ above the bead bottom (scaled with the
+ * bead thickness on adaptive layers). Uniform: cut at (i + ½)·h, nozzle at firstLayerZ + i·h.
+ */
+export function sliceForPrint(mesh: MeshData, s: PrintSettings): LayerSummary {
+  const b = computeBounds(mesh);
+  const stack = layerStack(mesh, s);
+  const zs = stack.map(([z, dz]) => b.min[2] + z + dz / 2);
   const raw = sliceAt(mesh, zs);
   const layers = raw.map((l, i) => ({
-    z: s.firstLayerZ + i * s.layerHeight,
+    z: stack[i][0] + (s.firstLayerZ * stack[i][1]) / s.layerHeight,
     // A solid filled layer must keep its real outline: no shell → mid-line collapse there.
     contours: collapseThinWalls(l.contours, s.mode === 'zigzag' ? 0 : s.thinWallMax).filter(
       (c) => polylineLength(c.pts, c.closed) >= s.minContourLength,

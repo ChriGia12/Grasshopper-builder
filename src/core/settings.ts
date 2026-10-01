@@ -9,6 +9,12 @@ export type PrintMode = 'planar' | 'spiral' | 'zigzag' | 'surface';
 
 export interface PrintSettings {
   layerHeight: number; // mm
+  /**
+   * Contour layers: thinner layers where the surface is shallow, so that two consecutive curves
+   * stay at most layerHeight apart along the surface (Δz = layerHeight · sin slope).
+   */
+  adaptiveLayers: boolean;
+  minLayerHeight: number; // mm, thinnest adaptive layer
   firstLayerZ: number; // mm, nozzle height of the first layer above the table (Tavolino1: 0.5)
   walls: number; // number of concentric perimeters
   wallSpacing: number; // mm, bead width / distance between perimeters
@@ -84,6 +90,8 @@ export interface RobotSettings {
 
 export const DEFAULT_PRINT: PrintSettings = {
   layerHeight: 1.5,
+  adaptiveLayers: false,
+  minLayerHeight: 0.3,
   firstLayerZ: 0.5,
   walls: 1,
   wallSpacing: 6,
