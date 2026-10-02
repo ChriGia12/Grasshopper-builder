@@ -1,7 +1,7 @@
 import './style.css';
 import { ACCEPTED, combineParts, loadModel, pickPieces, type CellRegion } from './core/loaders';
 import { sanitizeProgramName } from './core/kuka';
-import { IDENTITY, applyMatrix, computeBounds, cutByPlane, dropToOrigin, mergeMeshes, meshStats, mulMat3, rotX, rotY, rotZ, scale, translate, type Mat3, type MeshData } from './core/mesh';
+import { IDENTITY, applyMatrix, computeBounds, cutByPlane, dropToOrigin, mergeMeshes, meshStats, mulMat3, openEdgeLift, rotX, rotY, rotZ, scale, translate, type Mat3, type MeshData } from './core/mesh';
 import type { OrientationCandidate } from './core/orientation';
 import { placementOffset } from './core/pipeline';
 import { FIXED_ROBOT, validateSettings } from './core/validate';
@@ -326,6 +326,9 @@ function renderSplit() {
   $('cutUnit').textContent = t(cutState.axis === 2 ? 'cut.fromBottom' : 'cut.fromStart', { len: Math.round(len) });
   $<HTMLButtonElement>('cutApply').disabled = cutState.at < 1 || cutState.at > len - 1;
 
+  const lift = baseLift(p);
+  $('baseRow').hidden = !(lift > 1);
+  if (lift > 1) $('baseText').textContent = t('cut.baseText', { z: Math.ceil(lift) });
   const plan = p.split;
   $('splitBox').hidden = !plan;
   const size = 1.3 * Math.max(...[0, 1, 2].map((k) => f.bt.max[k] - f.bt.min[k]));
@@ -361,7 +364,15 @@ function renderSplit() {
 }
 
 /** Cut part p with the plane n·x = d (frame of the file): two pieces, each turned as given. */
-async function cutPart(p: Part, n: [number, number, number], d: number, downs: [[number, number, number], [number, number, number]], mode?: 'spiral' | 'planar') {
+async function cutPart(
+  p: Part,
+  n: [number, number, number],
+  d: number,
+  downs: [[number, number, number], [number, number, number]],
+  mode?: 'spiral' | 'planar',
+  /** true: the pieces are turned exactly as given; false: kept only if they print without supports. */
+  exact = false,
+) {
   const idx = parts.indexOf(p);
   const sides: [number, number, number][] = [[-n[0], -n[1], -n[2]], n];
   const pieces = sides.map((m, i): Part => {
@@ -377,7 +388,7 @@ async function cutPart(p: Part, n: [number, number, number], d: number, downs: [
       orientations: [],
       orientIdx: 0,
       manual: [...IDENTITY] as Mat3,
-      preferDown: downs[i],
+      ...(exact ? { wantDown: downs[i] } : { preferDown: downs[i] }),
       placed: i === 0, // the first piece keeps the place of the part, the second goes beside it
       split: null,
     };
@@ -470,6 +481,30 @@ function applyManualCut() {
   cutPart(p, n, c, [down, down]);
 }
 $('cutApply').onclick = applyManualCut;
+
+/** How high the open edge of the placed part rises off the table (0 when it lies flat). */
+function baseLift(p: Part): number {
+  if (!p.orientations.length) return 0;
+  return openEdgeLift(dropToOrigin(applyMatrix(p.mesh, placedFrame(p).M)));
+}
+
+/**
+ * Cut at the base, keep everything: the part is cut where its open edge stops touching the table;
+ * the part above rests on the flat cut, the band below is turned over onto the cut (its curved
+ * edge free on top) and printed beside it. The two are joined after printing along the cut.
+ */
+function applyBaseCut() {
+  const p = cur();
+  if (!p?.orientations.length) return;
+  const lift = Math.ceil(baseLift(p));
+  if (lift <= 0) return;
+  const f = placedFrame(p);
+  const n: [number, number, number] = [f.M[6], f.M[7], f.M[8]];
+  const O = orientedMatrix(p);
+  const down: [number, number, number] = [-O[6], -O[7], -O[8]];
+  cutPart(p, n, f.bt.min[2] + lift, [[-down[0], -down[1], -down[2]], down], undefined, true);
+}
+$('baseApply').onclick = applyBaseCut;
 $<HTMLSelectElement>('cutAxis').addEventListener('change', (e) => {
   const p = cur();
   cutState.axis = +(e.target as HTMLSelectElement).value as 0 | 1 | 2;

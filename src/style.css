@@ -237,6 +237,9 @@ button.active { background: var(--accent); color: var(--accent-ink); border-colo
 .cut-row input[type='range'] { flex: 1; }
 .cut-row input[type='number'] { width: 70px; font: inherit; font-size: 13px; color: var(--text); background: var(--bg); border: 1px solid var(--border); border-radius: 6px; padding: 4px 6px; }
 .cut-box > button { align-self: flex-start; }
+.base-row { border-top: 1px solid var(--border); padding-top: 8px; display: flex; flex-direction: column; gap: 6px; }
+.base-row p { margin: 0; }
+.base-row button { align-self: flex-start; }
 .split-box { margin-top: 2px; padding: 10px 12px; border: 1px solid var(--warn); background: var(--warn-soft); border-radius: 8px; font-size: 13px; }
 .split-box p { margin: 6px 0; }
 .split-box ul { margin: 0 0 8px; padding-left: 18px; }
