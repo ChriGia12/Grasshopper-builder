@@ -6,7 +6,7 @@ import { densify, pointInPolygon, polylineLength, rotateToNearest, signedArea, s
 import type { PrintMode, PrintSettings } from './settings';
 import { cFromNormal, HeightField, topSurfacePasses, type SurfaceOptions, type SurfacePoint, type SurfaceRun } from './surface';
 import { sliceAt, type Contour, type Layer } from './slicer';
-import { buildWalls, collapseThinWalls, islands, offsetContours } from './walls';
+import { buildWalls, collapseThinWalls, coverContours, islands, offsetContours } from './walls';
 import { scanFill, serpentine } from './zigzag';
 import { buildRings } from './rings';
 import { addSupports } from './supports';
@@ -215,6 +215,7 @@ function insideRegion(region: Contour[], s: PrintSettings): Inside {
  * hull the new layer is smaller, so the step lies on the layer below, which carries it.
  */
 function insideLayers(layer: Contour[], below: Contour[], s: PrintSettings): Inside {
+  // Closed sections cover their inside; open arcs and supports a band one bead wide.
   let grown: Contour[][] | null = null;
   const on = (q: Vec2, region: Contour[]) => {
     let inside = false;
@@ -222,7 +223,7 @@ function insideLayers(layer: Contour[], below: Contour[], s: PrintSettings): Ins
     return inside;
   };
   return (a, b) => {
-    grown ??= [layer, below].filter((r) => r.length).map((r) => offsetContours(r, linkMargin(s)));
+    grown ??= [layer, below].filter((r) => r.length).map((r) => coverContours(r, linkMargin(s), s.wallSpacing / 2 + linkMargin(s)));
     const n = Math.max(2, Math.ceil(Math.hypot(b[0] - a[0], b[1] - a[1])));
     for (let k = 1; k < n; k++) {
       const q: Vec2 = [a[0] + ((b[0] - a[0]) * k) / n, a[1] + ((b[1] - a[1]) * k) / n];
@@ -308,8 +309,8 @@ export function buildPlanar(tp: Toolpath, layers: Layer[], s: PrintSettings, sta
   for (const layer of layers) {
     tp.layerStart.push(tp.points.length);
     const closed = layer.contours.filter((c) => c.closed);
-    const inside = insideLayers(closed, below, s);
-    if (closed.length) below = closed;
+    const inside = insideLayers(layer.contours, below, s);
+    if (layer.contours.length) below = layer.contours;
     for (const wall of buildWalls(closed, s.walls, s.wallSpacing)) {
       const pending = [...wall];
       while (pending.length) {
@@ -332,26 +333,41 @@ export function buildPlanar(tp: Toolpath, layers: Layer[], s: PrintSettings, sta
         cur = loop[0];
       }
     }
-    for (const c of layer.contours.filter((c) => !c.closed)) {
+    // Open arcs (sections of an open shell) and supports, nearest first.
+    const openOnes = layer.contours.filter((c) => !c.closed);
+    while (openOnes.length) {
+      let bi = 0;
+      let bd = Infinity;
+      openOnes.forEach((o, k) => {
+        const loop = o.pts.length > 3 && Math.hypot(o.pts[0][0] - o.pts[o.pts.length - 1][0], o.pts[0][1] - o.pts[o.pts.length - 1][1]) < 1e-6;
+        const ends = loop ? o.pts : [o.pts[0], o.pts[o.pts.length - 1]];
+        const d = Math.min(...ends.map((q) => Math.hypot(q[0] - cur[0], q[1] - cur[1])));
+        if (d < bd) [bd, bi] = [d, k];
+      });
+      const c = openOnes.splice(bi, 1)[0];
       let pts = densify(simplifyOpen(c.pts, s.tolerance), s.maxSegment, false);
+      // A support outline is a loop written as a path: start it where the nozzle is.
+      const ring = pts.length > 3 && Math.hypot(pts[0][0] - pts[pts.length - 1][0], pts[0][1] - pts[pts.length - 1][1]) < 1e-6;
+      if (ring) {
+        const loop = rotateToNearest(pts.slice(0, -1), cur);
+        pts = [...loop, loop[0]];
+      }
       const dStart = Math.hypot(pts[0][0] - cur[0], pts[0][1] - cur[1]);
       const dEnd = Math.hypot(pts[pts.length - 1][0] - cur[0], pts[pts.length - 1][1] - cur[1]);
       if (dEnd < dStart) pts = pts.reverse();
       const last = tp.points[tp.points.length - 1];
-      // Open arc (the edge of an open shell): the arc of the layer below ends right under the start
-      // of this one — no region to check, but a step of at most one bead stays on the wall just
-      // printed. It is printed, climbing along the arc like the ramp of a closed loop.
+      const sup = c.support ? { support: true } : {};
       const hop = last ? Math.hypot(pts[0][0] - last.x, pts[0][1] - last.y) : Infinity;
-      if (last?.e && layer.z > last.z && hop <= Math.max(s.wallSpacing, s.maxBridge)) {
-        const arc: Vec2[] = [[last.x, last.y], ...pts];
-        const ramped = s.layerRamp > 0 ? rampPoints(arc, () => layer.z, last.z, s.layerRamp) : arc.map((q) => ({ x: q[0], y: q[1], z: layer.z, e: true }));
-        for (const q of ramped.slice(1)) push(tp, c.support ? { ...q, support: true } : q);
+      if (!c.support && last?.e && !last.support && layer.z > last.z && hop <= Math.max(s.wallSpacing, s.maxBridge)) {
+        // Open arc on top of the arc of the layer below: it ended right under this start. Up
+        // straight to the new layer, then back along the arc (an open arc goes back and forth).
+        if (hop > 1e-6) push(tp, { x: pts[0][0], y: pts[0][1], z: last.z, e: true });
+        push(tp, { x: pts[0][0], y: pts[0][1], z: layer.z, e: true });
       } else {
-        // Supports are removed after printing: a short hop from one to the next is printed too.
-        if (c.support && last?.e && last.z === layer.z && hop <= 3 * s.wallSpacing) push(tp, { x: pts[0][0], y: pts[0][1], z: layer.z, e: true, support: true });
-        else moveTo(tp, pts[0], layer.z, s, undefined, inside);
-        for (let i = 1; i < pts.length; i++) push(tp, { x: pts[i][0], y: pts[i][1], z: layer.z, e: true, ...(c.support ? { support: true } : {}) });
+        moveTo(tp, pts[0], layer.z, s, undefined, inside);
+        if (c.support) tp.points[tp.points.length - 1].support = true; // the move onto the support prints support
       }
+      for (let i = 1; i < pts.length; i++) push(tp, { x: pts[i][0], y: pts[i][1], z: layer.z, e: true, ...sup });
       cur = pts[pts.length - 1];
     }
   }

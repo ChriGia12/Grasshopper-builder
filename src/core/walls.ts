@@ -73,6 +73,36 @@ export function intersectContours(a: Contour[], b: Contour[]): Contour[] {
   );
 }
 
+/**
+ * Area covered by printing these contours: closed loops as filled regions grown by `rRegion`,
+ * open lines as bands `rLine` wide on each side. Returned as one union (classified loops).
+ */
+export function coverContours(contours: Contour[], rRegion: number, rLine: number): Contour[] {
+  const closed = contours.filter((c) => c.closed);
+  const open = contours.filter((c) => !c.closed && c.pts.length >= 2);
+  const out: { X: number; Y: number }[][] = [];
+  if (closed.length) {
+    const co = new ClipperLib.ClipperOffset(2, 0.05 * SCALE);
+    co.AddPaths(closed.map((c) => c.pts.map(([x, y]) => ({ X: Math.round(x * SCALE), Y: Math.round(y * SCALE) }))), ClipperLib.JoinType.jtRound, ClipperLib.EndType.etClosedPolygon);
+    const r: { X: number; Y: number }[][] = [];
+    co.Execute(r, rRegion * SCALE);
+    out.push(...r);
+  }
+  if (open.length) {
+    const co = new ClipperLib.ClipperOffset(2, 0.05 * SCALE);
+    co.AddPaths(open.map((c) => c.pts.map(([x, y]) => ({ X: Math.round(x * SCALE), Y: Math.round(y * SCALE) }))), ClipperLib.JoinType.jtRound, ClipperLib.EndType.etOpenRound);
+    const r: { X: number; Y: number }[][] = [];
+    co.Execute(r, rLine * SCALE);
+    out.push(...r);
+  }
+  if (!out.length) return [];
+  const clipper = new ClipperLib.Clipper();
+  clipper.AddPaths(out, ClipperLib.PolyType.ptSubject, true);
+  const u: { X: number; Y: number }[][] = [];
+  clipper.Execute(ClipperLib.ClipType.ctUnion, u, ClipperLib.PolyFillType.pftNonZero, ClipperLib.PolyFillType.pftNonZero);
+  return classify(u.filter((p) => p.length >= 3).map((p) => ({ pts: p.map((q) => [q.X / SCALE, q.Y / SCALE] as Vec2), closed: true, depth: 0 })));
+}
+
 /** Boolean difference a − b of two sets of closed contours (holes included). */
 export function differenceContours(a: Contour[], b: Contour[]): Contour[] {
   const toPaths = (cs: Contour[]) =>

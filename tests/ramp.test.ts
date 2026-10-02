@@ -127,10 +127,16 @@ describe('open shells (sections are open arcs)', () => {
     return weld({ positions: new Float32Array(pos), indices: new Uint32Array(idx) });
   }
 
-  it('the arcs are joined layer to layer on a ramp: no lifted travel', () => {
+  it('at the end of an arc the nozzle goes straight up and comes back along the arc above: no lifted travel', () => {
     const tp = buildToolpath(halfTube(50, 30), { ...DEFAULT_PRINT, mode: 'planar' });
     expect(tp.layerStart.length).toBeGreaterThan(10);
     expect(tp.travels).toBe(0);
     expect(tp.points.slice(1).every((p) => p.e)).toBe(true);
+    // every layer change: a vertical move (same x, y; z up one layer), then the arc the other way
+    for (const st of tp.layerStart.slice(1)) {
+      const [a, b] = [tp.points[st - 1], tp.points[st]];
+      expect(Math.hypot(b.x - a.x, b.y - a.y)).toBeLessThan(1e-6);
+      expect(b.z - a.z).toBeCloseTo(DEFAULT_PRINT.layerHeight, 6);
+    }
   });
 });

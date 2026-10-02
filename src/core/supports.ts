@@ -12,6 +12,8 @@ import type { Vec2 } from './polyline';
 import type { Contour, Layer } from './slicer';
 
 const SCALE = 1000;
+/** Columns closer than this many beads become one block. */
+const MERGE = 3;
 type IntPath = { X: number; Y: number }[];
 const toInt = (pts: Vec2[]): IntPath => pts.map(([x, y]) => ({ X: Math.round(x * SCALE), Y: Math.round(y * SCALE) }));
 const fromInt = (p: IntPath): Vec2[] => p.map((q) => [q.X / SCALE, q.Y / SCALE]);
@@ -65,8 +67,11 @@ export function addSupports(layers: Layer[], h: number, w: number, overhangDeg: 
     const hangs = bool(ClipperLib.ClipType.ctDifference, cover[i + 1], offset(cover[i], allow));
     if (area(hangs) > w * w * 0.25) column = ClipperLib.Clipper.CleanPolygons(bool(ClipperLib.ClipType.ctUnion, column, hangs), 0.05 * SCALE);
     if (!column.length) continue;
-    // In layer i the column is held up where the part is not.
-    const hold = bool(ClipperLib.ClipType.ctDifference, column, cover[i]);
+    // In layer i the column is held up where the part is not. Columns closer than a few beads
+    // are merged into one block (closing: grow, then shrink back): fewer, sturdier outlines and a
+    // continuous bead instead of a jump to every strip.
+    const merged = offset(offset(column, MERGE * w), -MERGE * w);
+    const hold = bool(ClipperLib.ClipType.ctDifference, merged, cover[i]);
     const loops = hold.map(fromInt).filter((pts) => {
       let len = 0;
       for (let k = 0; k < pts.length; k++) len += Math.hypot(pts[(k + 1) % pts.length][0] - pts[k][0], pts[(k + 1) % pts.length][1] - pts[k][1]);
