@@ -5,6 +5,7 @@ import { buildToolpath, sliceForPrint, type Toolpath } from '../src/core/toolpat
 import { sliceAt } from '../src/core/slicer';
 import { applyMatrix, dropToOrigin, mergeMeshes, rotX, weld, type MeshData } from '../src/core/mesh';
 import { runBuild } from '../src/core/pipeline';
+import { supportProgramName } from '../src/core/kuka';
 import { DEFAULT_ROBOT } from '../src/core/settings';
 import { polylineLength } from '../src/core/polyline';
 import { DEFAULT_PRINT, type PrintSettings } from '../src/core/settings';
@@ -115,6 +116,16 @@ describe('supports in a separate program, sparse fill, base cut', () => {
     // the checks run on supports first, then the part
     expect(sep.toolpath.points.findIndex((p) => !p.support && p.e)).toBeGreaterThan(sep.toolpath.points.findIndex((p) => p.support));
     expect(sep.toolpath.warnings.map((w) => w.k)).toContain('w.supportsSeparate');
+  });
+
+  it('a long program name keeps the _SUP suffix within the 24 KRL characters', () => {
+    const name = 'Barca_commessa_ABCDEF22'; // 23 characters
+    const sep = runBuild(mushroom(), I, { ...DEFAULT_PRINT, mode: 'planar', supports: 'separate' }, { ...DEFAULT_ROBOT, programName: name }, 't');
+    const def = sep.supportSrc!.match(/^DEF (\S+) \( \)/m)![1];
+    expect(def).toBe(supportProgramName(name));
+    expect(def).toBe('Barca_commessa_ABCDE_SUP');
+    expect(def.length).toBeLessThanOrEqual(24);
+    expect(sep.src).toMatch(new RegExp(`^DEF ${name} \\( \\)`, 'm'));
   });
 
   it('a wide overhang gets a sparse fill inside the support, not only its outline', () => {

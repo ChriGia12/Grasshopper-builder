@@ -2,7 +2,7 @@
 // deposited, along the print path (LIN) and on the PTP moves to and from the safe position.
 // Bodies are point samples of the cell meshes (public/cell.bin); the printed part is a voxel set
 // grown bead by bead while the path is replayed.
-import { FLANGE_FRAME, KR16, linkTransforms, robotRootFrame, type Joints } from './robot';
+import { FLANGE_FRAME, KR16, linkTransforms, poseAt, robotRootFrame, type Joints } from './robot';
 import type { PrintSettings, RobotSettings } from './settings';
 
 type V3 = [number, number, number];
@@ -151,7 +151,8 @@ export interface CollisionReport {
 
 /**
  * Replays the path: before checking pose i the beads up to i are deposited. Poses are checked
- * every `step` mm of nozzle motion. Then the PTP moves of the program (joint interpolation):
+ * every `step` mm of nozzle motion, inside long LINs too (an obstacle halfway along a segment
+ * whose ends are clear is still found; it is reported at the end of that LIN). Then the PTP moves of the program (joint interpolation):
  * safe → first point, last point → safe, safe → homing (A3 = 0) → safe.
  */
 export function collisionReport(
@@ -165,6 +166,14 @@ export function collisionReport(
   step = 3,
   /** Points reached with a PTP (change of part): the arm moves in joint space to them. */
   ptpAt?: ArrayLike<number | boolean>,
+  /** C of every point (NaN: the robot's C), interpolated along a LIN like the controller does. */
+  cs?: ArrayLike<number>,
+  /**
+   * Points where the next program starts (supports in a separate file): the end of the previous
+   * one (PTP to safe, homing) and the start of the next (safe → PTP to the point) are checked
+   * with everything printed so far as an obstacle.
+   */
+  programAt?: ArrayLike<number | boolean>,
 ): CollisionReport {
   const rep: CollisionReport = { count: 0, first: -1, what: null, body: '', points: [], ptp: [] };
   const obs = new Obstacles(r, bodies);
@@ -173,7 +182,7 @@ export function collisionReport(
   let checkedAt: V3 | null = null;
 
   const ptp = (move: 'start' | 'end' | 'home' | 'change', a: Joints, b: Joints, part: boolean) => {
-    const steps = Math.max(2, Math.ceil(Math.max(...a.map((v, k) => Math.abs(b[k] - v))) / 2)); // every 2° of the largest axis
+    const steps = Math.max(2, Math.ceil(Math.max(...a.map((v, k) => Math.abs(b[k] - v))) / 0.5)); // every 0.5° of the largest axis (≈ 10 mm at the tool)
     for (let k = 1; k < steps; k++) {
       const q = a.map((v, j) => v + ((b[j] - v) * k) / steps) as Joints;
       const h = obs.hit(q, part);
@@ -184,30 +193,67 @@ export function collisionReport(
     }
   };
   const safe = [...r.safeAxes] as Joints;
+  const home = [safe[0], safe[1], 0, safe[3], safe[4], safe[5]] as Joints;
   if (ends.first) ptp('start', safe, ends.first, false);
+
+  const cAt = (i: number) => {
+    const c = cs?.[i];
+    return c !== undefined && Number.isFinite(c) ? c : r.c;
+  };
+  const record = (i: number, h: { what: 'plate' | 'part'; body: string }) => {
+    rep.count++;
+    if (rep.first < 0) Object.assign(rep, { first: i, what: h.what, body: h.body });
+    if (rep.points.length < 500) rep.points.push(i);
+  };
 
   for (let i = 0; i < n; i++) {
     const p = at(i);
-    if (i > 0 && ext[i]) obs.addBead(at(i - 1), p, s);
     const q = Array.from(joints.subarray(i * 6, i * 6 + 6)) as Joints;
+    const q0 = i > 0 ? (Array.from(joints.subarray(i * 6 - 6, i * 6)) as Joints) : null;
+    // Inside a LIN longer than `step`: poses every `step` mm, the bead laid up to each of them.
+    let laidFrom = i > 0 ? at(i - 1) : p;
+    let hitInside = false;
+    if (i > 0 && !ptpAt?.[i] && q0 && Number.isFinite(q0[0])) {
+      const a = laidFrom;
+      const parts = Math.ceil(Math.hypot(p[0] - a[0], p[1] - a[1], p[2] - a[2]) / step);
+      let prev = q0;
+      for (let k = 1; k < parts && !hitInside; k++) {
+        const f = k / parts;
+        const m: V3 = [a[0] + (p[0] - a[0]) * f, a[1] + (p[1] - a[1]) * f, a[2] + (p[2] - a[2]) * f];
+        if (ext[i]) obs.addBead(laidFrom, m, s);
+        laidFrom = m;
+        const qm = poseAt(m, { ...r, c: cAt(i - 1) + (cAt(i) - cAt(i - 1)) * f }, prev);
+        if (!qm) continue; // unreachable: reported by reachReport
+        prev = qm;
+        const h = obs.hit(qm, true);
+        if (h) {
+          record(i, h);
+          hitInside = true;
+        }
+      }
+      if (parts > 1) checkedAt = laidFrom;
+    }
+    if (i > 0 && ext[i]) obs.addBead(laidFrom, p, s);
     if (!Number.isFinite(q[0])) continue; // unreachable: reported by reachReport
-    if (ptpAt?.[i] && i > 0) {
-      const q0 = Array.from(joints.subarray(i * 6 - 6, i * 6)) as Joints;
+    if (programAt?.[i] && q0 && Number.isFinite(q0[0])) {
+      ptp('end', q0, safe, true);
+      if (r.useHoming) {
+        ptp('home', safe, home, true);
+        ptp('home', home, safe, true);
+      }
+      ptp('start', safe, q, true);
+    } else if (ptpAt?.[i] && q0) {
       if (Number.isFinite(q0[0]) && rep.ptp.filter((c) => c.move === 'change').length < 3) ptp('change', q0, q, true);
     }
+    if (hitInside) continue; // this LIN is already counted
     if (checkedAt && i < n - 1 && Math.hypot(p[0] - checkedAt[0], p[1] - checkedAt[1], p[2] - checkedAt[2]) < step) continue;
     checkedAt = p;
     const h = obs.hit(q, true);
     if (!h) continue;
-    rep.count++;
-    if (rep.first < 0) Object.assign(rep, { first: i, what: h.what, body: h.body });
-    if (rep.points.length < 500) rep.points.push(i);
+    record(i, h);
   }
 
   if (ends.last) ptp('end', ends.last, safe, true);
-  if (r.useHoming) {
-    const home = [safe[0], safe[1], 0, safe[3], safe[4], safe[5]] as Joints;
-    ptp('home', safe, home, true);
-  }
+  if (r.useHoming) ptp('home', safe, home, true);
   return rep;
 }

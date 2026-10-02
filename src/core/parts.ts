@@ -14,29 +14,46 @@ export type PartBox = [number, number, number, number];
 /** Clearance of the PTP above everything printed so far (mm). */
 export const PART_CHANGE_CLEARANCE = 30;
 
-/** The triangles of `mesh` whose centre lies in the box (part frame + `offset` = BASE). */
-function partMesh(mesh: MeshData, box: PartBox, offset: [number, number, number]): MeshData | null {
+/** Distance from (x, y) to the box (0 inside). */
+const boxDistance = (b: PartBox, x: number, y: number) => Math.hypot(Math.max(b[0] - x, 0, x - b[2]), Math.max(b[1] - y, 0, y - b[3]));
+
+/** Two footprints overlap. */
+export const boxesOverlap = (a: PartBox, b: PartBox) => a[0] < b[2] && b[0] < a[2] && a[1] < b[3] && b[1] < a[3];
+
+/**
+ * The mesh split into the parts (part frame + `offset` = BASE): every triangle goes to exactly
+ * one part — the first box holding its centre, else the nearest box — so overlapping boxes never
+ * print a triangle twice and a triangle outside every box is never lost. null: nothing in that box.
+ */
+export function splitByBoxes(mesh: MeshData, boxes: PartBox[], offset: [number, number, number]): (MeshData | null)[] {
   const p = mesh.positions;
   const ix = mesh.indices;
-  const remap = new Map<number, number>();
-  const pos: number[] = [];
-  const idx: number[] = [];
+  const out = boxes.map(() => ({ remap: new Map<number, number>(), pos: [] as number[], idx: [] as number[] }));
   for (let t = 0; t < ix.length; t += 3) {
     const [a, b, c] = [ix[t], ix[t + 1], ix[t + 2]];
     const x = (p[a * 3] + p[b * 3] + p[c * 3]) / 3 + offset[0];
     const y = (p[a * 3 + 1] + p[b * 3 + 1] + p[c * 3 + 1]) / 3 + offset[1];
-    if (x < box[0] || x > box[2] || y < box[1] || y > box[3]) continue;
-    for (const v of [a, b, c]) {
-      let k = remap.get(v);
-      if (k === undefined) {
-        k = pos.length / 3;
-        remap.set(v, k);
-        pos.push(p[v * 3], p[v * 3 + 1], p[v * 3 + 2]);
+    let best = 0;
+    let bd = Infinity;
+    for (let k = 0; k < boxes.length && bd > 0; k++) {
+      const d = boxDistance(boxes[k], x, y);
+      if (d < bd) {
+        bd = d;
+        best = k;
       }
-      idx.push(k);
+    }
+    const o = out[best];
+    for (const v of [a, b, c]) {
+      let k = o.remap.get(v);
+      if (k === undefined) {
+        k = o.pos.length / 3;
+        o.remap.set(v, k);
+        o.pos.push(p[v * 3], p[v * 3 + 1], p[v * 3 + 2]);
+      }
+      o.idx.push(k);
     }
   }
-  return idx.length ? { positions: Float32Array.from(pos), indices: Uint32Array.from(idx) } : null;
+  return out.map((o) => (o.idx.length ? { positions: Float32Array.from(o.pos), indices: Uint32Array.from(o.idx) } : null));
 }
 
 /**
@@ -44,7 +61,7 @@ function partMesh(mesh: MeshData, box: PartBox, offset: [number, number, number]
  * where the first part starts (part frame); each next part starts near where the previous ended.
  */
 export function printPartsInTurn(mesh: MeshData, s: PrintSettings, boxes: PartBox[], offset: [number, number, number], start?: Vec2): Toolpath {
-  const all = boxes.map((b) => partMesh(mesh, b, offset));
+  const all = splitByBoxes(mesh, boxes, offset);
   const meshes = all.filter((m): m is MeshData => !!m);
   const out: Toolpath = {
     points: [],
@@ -116,27 +133,24 @@ export function printPartsInTurn(mesh: MeshData, s: PrintSettings, boxes: PartBo
 
 /**
  * Two programs run one after the other (supports printed first, then the part): one path for the
- * simulation and the checks, joined like a change of part (up, PTP above, down).
+ * simulation and the checks. Between them the robot does what the two .src files do — the first
+ * ends with a PTP to the safe position (and the homing), the second starts with a PTP from the
+ * safe position to its first point — so the first point of the second is marked `program`.
  */
-export function joinInTurn(first: Toolpath, second: Toolpath, s: PrintSettings): Toolpath {
+export function joinInTurn(first: Toolpath, second: Toolpath): Toolpath {
   if (!first.points.length) return second;
   if (!second.points.length) return first;
-  const last = first.points[first.points.length - 1];
-  const next = second.points[0];
-  let top = -Infinity;
-  for (const p of first.points) top = Math.max(top, p.z);
-  const zSafe = Math.max(top, next.z) + Math.max(s.travelLift, PART_CHANGE_CLEARANCE);
-  const points: PathPoint[] = [...first.points, { x: last.x, y: last.y, z: zSafe, e: false }, { x: next.x, y: next.y, z: zSafe, e: false, ptp: true }, ...second.points];
-  const base = first.points.length + 2;
+  const [start, ...rest] = second.points;
+  const points: PathPoint[] = [...first.points, { ...start, ptp: true, program: true }, ...rest];
+  const base = first.points.length;
   return {
     ...second,
     points,
     layerStart: [...first.layerStart, ...second.layerStart.map((i) => i + base)],
     layerCount: first.layerCount + second.layerCount,
     printLength: first.printLength + second.printLength,
-    travelLength: first.travelLength + second.travelLength + (zSafe - last.z) + Math.hypot(next.x - last.x, next.y - last.y) + (zSafe - next.z),
+    travelLength: first.travelLength + second.travelLength,
     travels: first.travels + second.travels,
-    partChanges: (second.partChanges ?? 0) + 1,
     warnings: [...second.warnings],
   };
 }

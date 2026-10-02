@@ -5,7 +5,7 @@ import { describe, expect, it } from 'vitest';
 import { runBuild } from '../src/core/pipeline';
 import { cellBodies, type CellPart } from '../src/core/collision';
 import { IDENTITY, mergeMeshes, weld, type Mat3 } from '../src/core/mesh';
-import { PART_CHANGE_CLEARANCE, type PartBox } from '../src/core/parts';
+import { PART_CHANGE_CLEARANCE, printPartsInTurn, type PartBox } from '../src/core/parts';
 import { DEFAULT_PRINT, DEFAULT_ROBOT } from '../src/core/settings';
 import { box } from './fixtures';
 
@@ -91,5 +91,36 @@ describe('a part lower than the base cut', () => {
     const two = weld(mergeMeshes([box(50, 40, 5), box(50, 40, 20, 0, 110, 0)]));
     const r = runBuild(two, I, { ...print, baseCut: 10 }, robot, 't', bodies, boxes);
     expect(r.toolpath.warnings.map((w) => w.k)).toContain('w.partEmpty');
+  });
+});
+
+describe('parts that overlap on the table', () => {
+  const over: PartBox[] = [
+    [-20, 440, 30, 530],
+    [-20, 500, 30, 590],
+  ];
+
+  it('block the export', () => {
+    const r = runBuild(pair, I, print, robot, 't', bodies, over);
+    expect(r.errors.map((e) => e.k)).toContain('v.partsOverlap');
+  });
+
+  it('every triangle goes to one part only: nothing is printed twice', () => {
+    const whole: PartBox = [-1000, -1000, 1000, 1000];
+    const once = printPartsInTurn(pair, print, [whole], [0, 0, 0]);
+    const twice = printPartsInTurn(pair, print, [whole, whole], [0, 0, 0]);
+    expect(twice.layerCount).toBe(once.layerCount);
+    expect(twice.printLength).toBeCloseTo(once.printLength, 6);
+  });
+
+  it('a triangle outside every box still goes to the nearest part: nothing is lost', () => {
+    // the boxes cover only the first block; the second one is closer to box 2
+    const tight: PartBox[] = [
+      [0, 0, 50, 40],
+      [0, 60, 50, 80],
+    ];
+    const r = printPartsInTurn(pair, print, tight, [0, 0, 0]);
+    expect(r.layerCount).toBe(10);
+    expect(r.warnings.map((w) => w.k)).not.toContain('w.partEmpty');
   });
 });

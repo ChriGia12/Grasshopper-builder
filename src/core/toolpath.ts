@@ -23,6 +23,12 @@ export interface PathPoint {
   support?: boolean;
   /** reached with a PTP (move between two parts, above them) instead of a LIN */
   ptp?: boolean;
+  /**
+   * first point of the next program (supports in a separate file, then the part): the robot ends
+   * the previous program (PTP to the safe position, homing) and starts this one (PTP from the
+   * safe position to here). Always together with `ptp`.
+   */
+  program?: boolean;
 }
 
 export interface Toolpath {

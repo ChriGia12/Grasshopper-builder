@@ -1,13 +1,13 @@
 // End-to-end build used by the worker: orient → slice → toolpath → KUKA .src.
 import { msg, SettingsError, type Msg } from '../i18n';
 import { validateSettings } from './validate';
-import { sanitizeProgramName, writeKukaSrc } from './kuka';
+import { supportProgramName, writeKukaSrc } from './kuka';
 import { applyMatrix, computeBounds, cutBelow, dropToOrigin, mulMat3, openEdgeLift, rotZ, translate, type Mat3, type MeshData } from './mesh';
 import type { PrintSettings, RobotSettings } from './settings';
 import { reachReport, type ReachReport } from './robot';
 import { buildPlanar, buildToolpath, sliceForPrint, spiralRange, type Toolpath } from './toolpath';
 import { riskZones, type Zones } from './zones';
-import { joinInTurn, printPartsInTurn, type PartBox } from './parts';
+import { boxesOverlap, joinInTurn, printPartsInTurn, type PartBox } from './parts';
 import { tiltAlongWalls } from './tilt';
 import { evaluateOrientation, OVERHANG_LIMIT, supportOk } from './orientation';
 import { collisionReport, type Body, type CollisionReport } from './collision';
@@ -87,8 +87,8 @@ export function runBuild(
     const supLayers = summary.layers.map((l) => ({ z: l.z, contours: l.contours.filter((c) => c.support) })).filter((l) => l.contours.length);
     buildPlanar(supportPath, supLayers, print, start ?? [0, 0]);
     supportPath.layerCount = supLayers.length;
-    toolpath = joinInTurn(supportPath, partPath, print);
-    toolpath.warnings.push(msg('w.supportsSeparate', { n: supLayers.length, name: sanitizeProgramName(robot.programName) + '_SUP' }));
+    toolpath = joinInTurn(supportPath, partPath);
+    toolpath.warnings.push(msg('w.supportsSeparate', { n: supLayers.length, name: supportProgramName(robot.programName) }));
   } else {
     // Several parts: one after the other, each one whole (parts.ts).
     toolpath = multi ? printPartsInTurn(mesh, print, partBoxes!, offset, start) : buildToolpath(mesh, print, summary, start);
@@ -101,7 +101,7 @@ export function runBuild(
   if (print.toolTilt && toolpath.mode !== 'surface') tiltAlongWalls(toolpath, mesh, print);
   const src = writeKukaSrc(partPath ?? toolpath, placed, { sourceName, layerHeight: print.layerHeight });
   const supportSrc = supportPath?.points.length
-    ? writeKukaSrc(supportPath, { ...placed, programName: sanitizeProgramName(robot.programName) + '_SUP' }, { sourceName, layerHeight: print.layerHeight })
+    ? writeKukaSrc(supportPath, { ...placed, programName: supportProgramName(robot.programName) }, { sourceName, layerHeight: print.layerHeight })
     : undefined;
 
   const min: [number, number, number] = [Infinity, Infinity, Infinity];
@@ -114,6 +114,12 @@ export function runBuild(
     }
   }
   const errors: Msg[] = [];
+  // Overlapping parts would be printed into each other: never exportable.
+  partBoxes?.forEach((a, i) =>
+    partBoxes.slice(i + 1).forEach((b, k) => {
+      if (boxesOverlap(a, b)) errors.push(msg('v.partsOverlap', { a: i + 1, b: i + 2 + k }));
+    }),
+  );
   const bx0 = robot.bedCenterX - robot.bedSizeX / 2;
   const by0 = robot.bedCenterY - robot.bedSizeY / 2;
   const offBed = min[0] < bx0 || min[1] < by0 || max[0] > bx0 + robot.bedSizeX || max[1] > by0 + robot.bedSizeY;
@@ -126,6 +132,7 @@ export function runBuild(
   toolpath.points.forEach((p, i) => basePts.set([p.x + offset[0], p.y + offset[1], p.z + offset[2]], i * 3));
   const cs = Float64Array.from(toolpath.points, (p) => p.c ?? NaN);
   const ptpAt = Uint8Array.from(toolpath.points, (p) => (p.ptp ? 1 : 0));
+  const programAt = Uint8Array.from(toolpath.points, (p) => (p.program ? 1 : 0));
   const reach = reachReport(basePts, robot, cs, 20, ptpAt);
   if (reach.unreachable)
     toolpath.warnings.push(msg('w.unreachable', { n: reach.unreachable }));
@@ -150,7 +157,7 @@ export function runBuild(
   let collision: CollisionReport | null = null;
   if (bodies?.length) {
     const ext = Uint8Array.from(toolpath.points, (p) => (p.e ? 1 : 0));
-    collision = collisionReport(basePts, ext, reach.joints, bodies, robot, print, { first: reach.first, last: reach.last }, 3, ptpAt);
+    collision = collisionReport(basePts, ext, reach.joints, bodies, robot, print, { first: reach.first, last: reach.last }, 3, ptpAt, cs, programAt);
     if (collision.count)
       errors.push(msg('v.collision', { n: collision.count, lin: collision.first + 1, what: `c.${collision.what}`, body: collision.body }));
     for (const c of collision.ptp) errors.push(msg('v.ptpCollision', { move: `c.move.${c.move}`, what: `c.${c.what}`, body: c.body }));

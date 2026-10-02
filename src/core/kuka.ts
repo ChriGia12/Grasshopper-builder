@@ -20,6 +20,9 @@ export function sanitizeProgramName(name: string): string {
   return n.slice(0, 24) || 'Pezzo1';
 }
 
+/** Name of the support program: the part's name cut to leave room for `_SUP` (24 chars in all). */
+export const supportProgramName = (name: string) => sanitizeProgramName(name).slice(0, 20) + '_SUP';
+
 export function toBase(p: PathPoint, r: RobotSettings): [number, number, number] {
   return [p.x + r.originX, p.y + r.originY, p.z + r.originZ];
 }

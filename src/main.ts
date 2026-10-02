@@ -1,6 +1,6 @@
 import './style.css';
 import { ACCEPTED, combineParts, loadModel, pickPieces, type CellRegion } from './core/loaders';
-import { sanitizeProgramName } from './core/kuka';
+import { sanitizeProgramName, supportProgramName } from './core/kuka';
 import { IDENTITY, applyMatrix, computeBounds, cutByPlane, dropToOrigin, mergeMeshes, meshStats, mulMat3, openEdgeLift, rotX, rotY, rotZ, scale, translate, type Mat3, type MeshData } from './core/mesh';
 import type { OrientationCandidate } from './core/orientation';
 import { placementOffset } from './core/pipeline';
@@ -1201,12 +1201,8 @@ function assembly(): { mesh: MeshData; matrix: Mat3; robot: RobotSettings; name:
     boxes.push([b.min[0] + x, b.min[1] + y, b.max[0] + x, b.max[1] + y]);
     return translate(m, x, y, 0);
   });
+  // Overlapping parts are a blocking error of the build (pipeline.ts).
   const notes: Msg[] = [];
-  boxes.forEach((a, i) =>
-    boxes.slice(i + 1).forEach((b, k) => {
-      if (a[0] < b[2] && b[0] < a[2] && a[1] < b[3] && b[1] < a[3]) notes.push(msg('w.partsOverlap', { a: parts[i].name, b: parts[i + 1 + k].name }));
-    }),
-  );
   const all = mergeMeshes(placed);
   const b = computeBounds(all);
   const r = { ...robot, placement: 'origin' as const, originX: (b.min[0] + b.max[0]) / 2, originY: (b.min[1] + b.max[1]) / 2, rotationZ: 0 };
@@ -1592,7 +1588,7 @@ $('downloadSup').onclick = () => {
   if (!text || !lastSrc || exportBlocks().length) return;
   const a = document.createElement('a');
   a.href = URL.createObjectURL(new Blob([text], { type: 'text/plain' }));
-  a.download = sanitizeProgramName(robot.programName) + '_SUP.src';
+  a.download = supportProgramName(robot.programName) + '.src';
   a.click();
   setTimeout(() => URL.revokeObjectURL(a.href), 1000);
 };
