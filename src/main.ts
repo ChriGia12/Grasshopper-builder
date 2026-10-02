@@ -5,7 +5,7 @@ import { IDENTITY, applyMatrix, computeBounds, cutByPlane, dropToOrigin, mergeMe
 import type { OrientationCandidate } from './core/orientation';
 import { placementOffset } from './core/pipeline';
 import { FIXED_ROBOT, validateSettings } from './core/validate';
-import { FLANGE_FRAME, KR16, linkTransforms, poseAt, robotRootFrame, type Joints, type ReachReport } from './core/robot';
+import { alongPtp, FLANGE_FRAME, KR16, linkTransforms, poseAt, programChangePoses, robotRootFrame, type Joints, type ReachReport } from './core/robot';
 import { DEFAULT_PRINT, DEFAULT_ROBOT, type PrintSettings, type RobotSettings } from './core/settings';
 import type { Toolpath } from './core/toolpath';
 import { cellBodies, type Body, type CollisionReport } from './core/collision';
@@ -1167,6 +1167,7 @@ interface BuildMsg {
   cc: Float32Array;
   ptp: Uint8Array;
   sup: Uint8Array;
+  prog: Uint8Array;
   meta: Toolpath;
   src: string;
   supportSrc?: string;
@@ -1332,7 +1333,7 @@ function setSimIndex(i: number, keepPos = false) {
   const q = poseAt(p, Number.isFinite(cPt) ? { ...robot, c } : robot, robotPose);
   if (q) showRobot(q);
   const f = (v: number) => v.toFixed(1);
-  const move = r.ext[simIndex] ? t('sim.print') : r.ptp[simIndex] ? t('sim.partChange') : t('sim.travel');
+  const move = r.ext[simIndex] ? t('sim.print') : r.prog[simIndex] ? t('sim.prog.start') : r.ptp[simIndex] ? t('sim.partChange') : t('sim.travel');
   $('simReadout').innerHTML =
     `${r.ptp[simIndex] ? 'PTP' : 'LIN'} ${simIndex + 1} / ${n} · ${move}\nX ${f(p[0])}  Y ${f(p[1])}  Z ${f(p[2])}  A ${robot.a}  B ${robot.b}  C ${f(c)}\n` +
     (q ? q.map((v, k) => `A${k + 1} ${v.toFixed(1)}°`).join('  ') : `<span class="bad">${escapeHtml(t('sim.unreachable'))}</span>`);
@@ -1340,17 +1341,62 @@ function setSimIndex(i: number, keepPos = false) {
 
 function stopSim() {
   playing = false;
+  simPtp = null;
   $('playBtn').textContent = t('sim.play');
+}
+
+/** Axis speed shown for the PTP moves at ×1 (°/s of the axis that moves most). */
+const SIM_PTP_SPEED = 60;
+/**
+ * A PTP being played: the axes move through `poses` (change of part: straight across; next
+ * program: safe position, homing, safe position, first point), then the path goes on at `to`.
+ */
+let simPtp: { poses: Joints[]; at: number; to: number; program: boolean } | null = null;
+
+/** The PTP that reaches point i, as the robot runs it (null if the axes are not known). */
+function ptpInto(r: BuildMsg, i: number): Joints[] | null {
+  const j = r.reach.joints;
+  const q0 = Array.from(j.subarray(i * 6 - 6, i * 6)) as Joints;
+  const q1 = Array.from(j.subarray(i * 6, i * 6 + 6)) as Joints;
+  if (!Number.isFinite(q0[0]) || !Number.isFinite(q1[0])) return null;
+  return r.prog[i] ? programChangePoses(q0, q1, robot) : [q0, q1];
 }
 
 function tick(now: number) {
   if (!playing || !lastBuild) return;
+  const r = lastBuild;
   // rAF timestamps can precede the click time: never step backwards, cap long pauses.
   const dt = Math.max(0, Math.min(0.1, (now - lastFrame) / 1000));
   lastFrame = now;
-  simPos += dt * robot.velCP * 1000 * +$<HTMLSelectElement>('simSpeed').value;
+  const speed = +$<HTMLSelectElement>('simSpeed').value;
+  if (simPtp) {
+    simPtp.at += dt * SIM_PTP_SPEED * speed;
+    const s = alongPtp(simPtp.poses, simPtp.at);
+    if (s.done) {
+      const to = simPtp.to;
+      simPtp = null;
+      setSimIndex(to);
+    } else {
+      showRobot(s.q);
+      const step = simPtp.program ? t(`sim.prog.${s.leg === 0 ? 'safe' : s.leg === simPtp.poses.length - 2 ? 'start' : 'home'}`) : t('sim.partChange');
+      $('simReadout').innerHTML = `PTP · ${escapeHtml(step)}\n` + s.q.map((v, k) => `A${k + 1} ${v.toFixed(1)}°`).join('  ');
+    }
+    requestAnimationFrame(tick);
+    return;
+  }
+  simPos += dt * robot.velCP * 1000 * speed;
   let i = simIndex;
-  while (i < simCum.length - 1 && simCum[i + 1] <= simPos) i++;
+  while (i < simCum.length - 1 && simCum[i + 1] <= simPos) {
+    i++;
+    // A PTP is played in the axes, as the robot moves: the path waits at the point before it.
+    const poses = r.ptp[i] ? ptpInto(r, i) : null;
+    if (poses) {
+      if (i - 1 !== simIndex) setSimIndex(i - 1, true);
+      simPtp = { poses, at: 0, to: i, program: !!r.prog[i] };
+      requestAnimationFrame(tick);
+      return;
+    }
+  }
   if (i !== simIndex) setSimIndex(i, true);
   if (i >= simCum.length - 1) stopSim();
   else requestAnimationFrame(tick);

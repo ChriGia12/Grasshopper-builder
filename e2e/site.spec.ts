@@ -11,6 +11,17 @@ function boxStl(sx: number, sy: number, sz: number): Buffer {
   return Buffer.from(s + 'endsolid b\n');
 }
 
+/** ASCII STL of several boxes [x, y, z, sx, sy, sz] (mm) in one solid. */
+function boxesStl(boxes: number[][]): Buffer {
+  const faces = [[0, 2, 3], [0, 3, 1], [4, 5, 7], [4, 7, 6], [0, 1, 5], [0, 5, 4], [2, 6, 7], [2, 7, 3], [0, 4, 6], [0, 6, 2], [1, 3, 7], [1, 7, 5]];
+  let s = 'solid b\n';
+  for (const [x, y, z, sx, sy, sz] of boxes) {
+    const v = (i: number) => [x + (i & 1 ? sx : 0), y + (i & 2 ? sy : 0), z + (i & 4 ? sz : 0)];
+    for (const f of faces) s += 'facet normal 0 0 0\nouter loop\n' + f.map((i) => `vertex ${v(i).join(' ')}`).join('\n') + '\nendloop\nendfacet\n';
+  }
+  return Buffer.from(s + 'endsolid b\n');
+}
+
 const addPart = (page: Page, name: string, sx = 80, sy = 60, sz = 20) =>
   page.setInputFiles('#file', { name, mimeType: 'model/stl', buffer: boxStl(sx, sy, sz) });
 
@@ -239,4 +250,58 @@ test('the browser warning stays hidden when everything works', async ({ page }) 
   await expect.poll(() => page.evaluate(() => (window as unknown as { kinepathStarted?: boolean }).kinepathStarted)).toBe(true);
   await page.waitForTimeout(9000);
   await expect(page.locator('#browserWarn')).toBeHidden();
+});
+
+test('supports in their own program: the simulation plays the real change of program', async ({ page }) => {
+  // a 3D cross: whichever way it lies, two arms hang in the air and need supports
+  const jack = boxesStl([
+    [0, 25, 25, 60, 10, 10],
+    [25, 0, 25, 10, 60, 10],
+    [25, 25, 0, 10, 10, 60],
+  ]);
+  await page.setInputFiles('#file', { name: 'croce.stl', mimeType: 'model/stl', buffer: jack });
+  await expect(download(page)).toBeVisible();
+  await page.locator('#printFields label').filter({ hasText: 'Curve che seguono' }).locator('input').uncheck();
+  await field(page, 'Supporti').selectOption('separate');
+  await expect(page.locator('#downloadSup')).toBeVisible();
+  // the first point of the part program, found by scrubbing the slider
+  const k = await page.evaluate(() => {
+    const slider = document.getElementById('simSlider') as HTMLInputElement;
+    for (let i = 1; i <= +slider.max; i++) {
+      slider.value = String(i);
+      slider.dispatchEvent(new Event('input'));
+      if (document.getElementById('simReadout')!.textContent!.includes('inizio programma del pezzo')) return i;
+    }
+    return -1;
+  });
+  expect(k).toBeGreaterThan(0);
+  await page.evaluate((i) => {
+    const slider = document.getElementById('simSlider') as HTMLInputElement;
+    slider.value = String(i);
+    slider.dispatchEvent(new Event('input'));
+  }, k - 1);
+  await page.locator('#simSpeed').selectOption('1');
+  // every text the readout shows, in order
+  await page.evaluate(() => {
+    const el = document.getElementById('simReadout')!;
+    const seen: string[] = ((window as unknown as { seen: string[] }).seen = []);
+    new MutationObserver(() => seen.push(el.textContent!.split('\n')[0])).observe(el, { childList: true, characterData: true, subtree: true });
+  });
+  await page.locator('#playBtn').click();
+  // until printing goes on after the start of the part program
+  await page.waitForFunction(
+    (i) => {
+      const seen = (window as unknown as { seen: string[] }).seen;
+      const start = seen.findIndex((l) => l.startsWith(`PTP ${i + 1} /`));
+      return start >= 0 && seen.slice(start).some((l) => l.startsWith('LIN'));
+    },
+    k,
+    { timeout: 20_000 },
+  );
+  const seen = await page.evaluate(() => (window as unknown as { seen: string[] }).seen);
+  const at = (text: string) => seen.findIndex((l) => l.includes(text));
+  // last support point → safe position → homing → safe position → first point of the part
+  expect(at('fine programma supporti')).toBeGreaterThanOrEqual(0);
+  expect(at('homing tra i due programmi')).toBeGreaterThan(at('fine programma supporti'));
+  expect(at(`PTP ${k + 1} /`)).toBeGreaterThan(at('homing tra i due programmi'));
 });

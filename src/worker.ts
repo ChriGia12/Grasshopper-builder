@@ -33,6 +33,7 @@ self.onmessage = (ev: MessageEvent<WorkerRequest>) => {
       const cc = Float32Array.from(pts, (p) => p.c ?? NaN); // per-point tool tilt (surface mode)
       const ptp = Uint8Array.from(pts, (p) => (p.ptp ? 1 : 0)); // moves between parts
       const sup = Uint8Array.from(pts, (p) => (p.support ? 1 : 0)); // removable supports
+      const prog = Uint8Array.from(pts, (p) => (p.program ? 1 : 0)); // start of the next program
       pts.forEach((p, i) => {
         xyz[i * 3] = p.x;
         xyz[i * 3 + 1] = p.y;
@@ -41,8 +42,8 @@ self.onmessage = (ev: MessageEvent<WorkerRequest>) => {
       });
       const meta = { ...r.toolpath, points: [] };
       self.postMessage(
-        { type: 'build', id: req.id, xyz, ext, cc, ptp, sup, meta, src: r.src, supportSrc: r.supportSrc, offset: r.offset, mesh: r.mesh, min: r.min, max: r.max, reach: r.reach, errors: r.errors, offBed: r.offBed, support: r.support, zones: r.zones, collision: r.collision },
-        { transfer: [xyz.buffer, ext.buffer, cc.buffer, ptp.buffer, sup.buffer] },
+        { type: 'build', id: req.id, xyz, ext, cc, ptp, sup, prog, meta, src: r.src, supportSrc: r.supportSrc, offset: r.offset, mesh: r.mesh, min: r.min, max: r.max, reach: r.reach, errors: r.errors, offBed: r.offBed, support: r.support, zones: r.zones, collision: r.collision },
+        { transfer: [xyz.buffer, ext.buffer, cc.buffer, ptp.buffer, sup.buffer, prog.buffer] },
       );
     }
   } catch (e) {

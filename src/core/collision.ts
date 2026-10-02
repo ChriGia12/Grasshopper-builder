@@ -2,7 +2,7 @@
 // deposited, along the print path (LIN) and on the PTP moves to and from the safe position.
 // Bodies are point samples of the cell meshes (public/cell.bin); the printed part is a voxel set
 // grown bead by bead while the path is replayed.
-import { FLANGE_FRAME, KR16, linkTransforms, poseAt, robotRootFrame, type Joints } from './robot';
+import { FLANGE_FRAME, KR16, linkTransforms, poseAt, programChangePoses, robotRootFrame, type Joints } from './robot';
 import type { PrintSettings, RobotSettings } from './settings';
 
 type V3 = [number, number, number];
@@ -236,12 +236,8 @@ export function collisionReport(
     if (i > 0 && ext[i]) obs.addBead(laidFrom, p, s);
     if (!Number.isFinite(q[0])) continue; // unreachable: reported by reachReport
     if (programAt?.[i] && q0 && Number.isFinite(q0[0])) {
-      ptp('end', q0, safe, true);
-      if (r.useHoming) {
-        ptp('home', safe, home, true);
-        ptp('home', home, safe, true);
-      }
-      ptp('start', safe, q, true);
+      const poses = programChangePoses(q0, q, r);
+      for (let k = 1; k < poses.length; k++) ptp(k === 1 ? 'end' : k === poses.length - 1 ? 'start' : 'home', poses[k - 1], poses[k], true);
     } else if (ptpAt?.[i] && q0) {
       if (Number.isFinite(q0[0]) && rep.ptp.filter((c) => c.move === 'change').length < 3) ptp('change', q0, q, true);
     }

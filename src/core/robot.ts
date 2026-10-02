@@ -286,3 +286,28 @@ export function poseAt(pBase: V3, r: RobotSettings, prev?: Joints): Joints | nul
   const t = flangeTarget(pBase, r);
   return inverseKinematics(t.R, t.p, prev);
 }
+
+/**
+ * Axis poses the robot passes through between two programs run one after the other (supports
+ * in a separate file, then the part): the first ends with a PTP to the safe position and the
+ * homing, the second starts from the safe position with a PTP to its first point. Every leg is a
+ * PTP: the axes move linearly from one pose to the next.
+ */
+export function programChangePoses(from: Joints, to: Joints, r: RobotSettings): Joints[] {
+  const safe = [...r.safeAxes] as Joints;
+  const home = [safe[0], safe[1], 0, safe[3], safe[4], safe[5]] as Joints;
+  return r.useHoming ? [from, safe, home, safe, to] : [from, safe, to];
+}
+
+/** Pose at `t` degrees along PTP legs through `poses` (each leg as long as its largest axis move). */
+export function alongPtp(poses: Joints[], t: number): { q: Joints; leg: number; done: boolean } {
+  let left = Math.max(0, t);
+  for (let k = 1; k < poses.length; k++) {
+    const [a, b] = [poses[k - 1], poses[k]];
+    const len = Math.max(...a.map((v, j) => Math.abs(b[j] - v)));
+    if (left < len) return { q: a.map((v, j) => v + ((b[j] - v) * left) / len) as Joints, leg: k - 1, done: false };
+    left -= len;
+  }
+  return { q: poses[poses.length - 1], leg: poses.length - 2, done: true };
+}
+

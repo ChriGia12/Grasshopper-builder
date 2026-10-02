@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { abcMatrix, flangeTarget, reachReport, robotRootInBase } from '../src/core/robot';
+import { abcMatrix, alongPtp, flangeTarget, programChangePoses, reachReport, robotRootInBase, type Joints } from '../src/core/robot';
 import { DEFAULT_ROBOT } from '../src/core/settings';
 
 describe('robot frames', () => {
@@ -62,3 +62,28 @@ describe('placement and start point', () => {
     expect(r.max[1] - r.min[1]).toBeCloseTo(100, 1);
   });
 });
+
+describe('PTP moves between two programs', () => {
+  const from: Joints = [-20, -55, 113, -23, -60, 12];
+  const to: Joints = [-22, -43, 113, -24, -71, 8];
+
+  it('the support program ends at the safe position and homing, the part program starts from the safe position', () => {
+    const safe = [...DEFAULT_ROBOT.safeAxes];
+    const home = [safe[0], safe[1], 0, safe[3], safe[4], safe[5]];
+    expect(programChangePoses(from, to, DEFAULT_ROBOT)).toEqual([from, safe, home, safe, to]);
+    expect(programChangePoses(from, to, { ...DEFAULT_ROBOT, useHoming: false })).toEqual([from, safe, to]);
+  });
+
+  it('the axes move linearly along each leg and stop at the last pose', () => {
+    const poses = programChangePoses(from, to, DEFAULT_ROBOT);
+    const first = Math.max(...from.map((v, j) => Math.abs(poses[1][j] - v))); // degrees of the first leg
+    const mid = alongPtp(poses, first / 2);
+    expect(mid.leg).toBe(0);
+    mid.q.forEach((v, j) => expect(v).toBeCloseTo((from[j] + poses[1][j]) / 2, 9));
+    expect(alongPtp(poses, first + 1e-9).leg).toBe(1);
+    const end = alongPtp(poses, 1e6);
+    expect(end.done).toBe(true);
+    expect(end.q).toEqual(to);
+  });
+});
+
