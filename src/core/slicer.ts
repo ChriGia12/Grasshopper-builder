@@ -8,6 +8,8 @@ export interface Contour {
   closed: boolean;
   /** Nesting depth: 0 = outer skin, 1 = hole, 2 = island inside a hole, ... */
   depth: number;
+  /** Removable support added under something that hangs (not part of the mesh). */
+  support?: boolean;
 }
 
 export interface Layer {

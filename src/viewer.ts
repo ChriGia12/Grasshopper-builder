@@ -279,7 +279,8 @@ export class Viewer {
     }
   }
 
-  setToolpath(xyz: Float32Array | null, ext: Uint8Array | null, layerStart: number[], offset: [number, number, number]) {
+  /** `sup`: 1 where the move prints a removable support (drawn grey). */
+  setToolpath(xyz: Float32Array | null, ext: Uint8Array | null, layerStart: number[], offset: [number, number, number], sup?: Uint8Array) {
     for (const l of [this.path, this.ghost]) {
       if (!l) continue;
       this.scene.remove(l);
@@ -306,7 +307,8 @@ export class Viewer {
         pos[s + 3 + k] = xyz[i * 3 + k] + offset[k];
       }
       // Extrusion colored bottom→top blue→red; travels (extruder off) in magenta.
-      if (ext[i]) c.setHSL(0.62 - 0.62 * (layer / layers), 0.85, 0.55);
+      if (ext[i] && sup?.[i]) c.set(0x9aa0a8);
+      else if (ext[i]) c.setHSL(0.62 - 0.62 * (layer / layers), 0.85, 0.55);
       else c.set(0xff3b9d);
       col.set([c.r, c.g, c.b, c.r, c.g, c.b], s);
     }

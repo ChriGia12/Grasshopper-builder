@@ -406,7 +406,7 @@ export function buildRings(input: MeshData, s: PrintSettings, start: Vec2, spira
   const levels: Ring[][] = [];
   for (let k = 0; k + 0.5 < top; k++) {
     const rings = levelRings(mesh, phi, k + 0.5)
-      .filter((r) => ringLength(r) >= Math.max(s.minContourLength, s.wallSpacing))
+      .filter((r) => ringLength(r) >= Math.max(s.minContourLength, 0.5)) // below 0.5 mm: a point, not a ring
       .map((r) => {
         const pts = simplify3(r.closed ? [...r.pts, r.pts[0]] : r.pts, s.tolerance);
         return { closed: r.closed, pts: r.closed ? pts.slice(0, -1) : pts };
@@ -424,11 +424,8 @@ export function buildRings(input: MeshData, s: PrintSettings, start: Vec2, spira
         return a2 < 0 ? { closed: true, pts: [...r.pts].reverse() } : r;
       })
       .filter((r) => r.pts.length >= 2);
-    // Tiny loops beside the main ring of a level are bumps of the field, not real features: the
-    // neighbouring rings cover them. A tiny loop alone is the top closing, and stays.
-    const main = Math.max(0, ...rings.map((r) => ringLength(r)));
-    const kept = rings.filter((r) => rings.length === 1 || ringLength(r) >= Math.min(main / 4, 2 * Math.PI * s.wallSpacing));
-    if (kept.length) levels.push(kept);
+    // Every ring is printed: a small loop beside the main one is surface too.
+    if (rings.length) levels.push(rings);
   }
   const single = first >= 0 && levels.length > 1 && levels.every((l) => l.length === 1 && l[0].closed);
   const tp: Toolpath = {

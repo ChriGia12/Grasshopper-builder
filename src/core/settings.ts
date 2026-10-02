@@ -16,15 +16,15 @@ export interface PrintSettings {
    * the previous ring (layerHeight in Z on steep walls, wallSpacing sideways on flat areas).
    */
   adaptiveLayers: boolean;
-  /** mm: the part is cut by a plane this high above its lowest point and rests on the cut. */
-  baseCut: number;
+  /** Removable support walls under what hangs in the air (the mesh is never changed). */
+  supports: boolean;
   firstLayerZ: number; // mm, nozzle height of the first layer above the table (Tavolino1: 0.5)
   walls: number; // number of concentric perimeters
   wallSpacing: number; // mm, bead width / distance between perimeters
   tolerance: number; // mm, max chord deviation from the exact contour
   maxSegment: number; // mm, split longer LINs (0 = off)
   mode: PrintMode;
-  minContourLength: number; // mm, ignore smaller loops (noise)
+  minContourLength: number; // mm, leave out shorter contours (0 = print everything); reported
   maxBridge: number; // mm, jumps shorter than this keep extruding (like Tavolino layer changes)
   travelLift: number; // mm, Z lift for travels with extruder off
   overhangAngle: number; // deg from vertical considered critical
@@ -98,14 +98,14 @@ export const DEFAULT_PRINT: PrintSettings = {
   layerHeight: 1.5,
   layerRamp: 20,
   adaptiveLayers: false,
-  baseCut: 0,
+  supports: false,
   firstLayerZ: 0.5,
   walls: 1,
   wallSpacing: 6,
   tolerance: 0.2,
   maxSegment: 0,
   mode: 'planar',
-  minContourLength: 10,
+  minContourLength: 0,
   maxBridge: 8,
   travelLift: 10,
   overhangAngle: 45,

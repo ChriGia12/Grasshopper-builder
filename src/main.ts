@@ -36,6 +36,15 @@ const save = (key: string, v: unknown) => {
 
 const print: PrintSettings = load('gb.print', DEFAULT_PRINT);
 if ((print.mode as string) === 'auto') print.mode = 'planar'; // old saved setting
+// The whole mesh is printed: an old saved minimum contour length (10 mm) no longer applies.
+try {
+  if (localStorage.getItem('gb.meshWhole') !== '1') {
+    print.minContourLength = 0;
+    localStorage.setItem('gb.meshWhole', '1');
+  }
+} catch {
+  /* storage unavailable */
+}
 const robot: RobotSettings = load('gb.robot', DEFAULT_ROBOT);
 // The cell is fixed (robot, table, controller frames): never take these from old saved settings.
 const CELL_KEYS = ['worldBaseX', 'worldBaseY', 'worldBaseZ', 'bedSizeX', 'bedSizeY', 'bedCenterX', 'bedCenterY', 'bedTopZ', 'baseData', 'toolData'] as const;
@@ -279,7 +288,7 @@ function selectPart(i: number) {
 
 
 /** Manual cut of the selected part, in the frame of the plate: axis and distance from its start. */
-const cutState = { axis: 2 as 0 | 1 | 2, at: 0, touched: false, part: null as Part | null };
+const cutState = { axis: 2 as 0 | 1 | 2, at: 0, touched: false, part: null as Part | null, len: 0 };
 
 /** The selected part as it stands on the plate: rotation from its file, and its extent. */
 function placedFrame(p: Part) {
@@ -292,7 +301,7 @@ function placedFrame(p: Part) {
   const base = (q: [number, number, number]): [number, number, number] => [
     q[0] - (bt.min[0] + bt.max[0]) / 2 + xy[0],
     q[1] - (bt.min[1] + bt.max[1]) / 2 + xy[1],
-    q[2] - bt.min[2] - print.baseCut + (r?.offset[2] ?? 0),
+    q[2] - bt.min[2] + (r?.offset[2] ?? 0),
   ];
   return { M, bt, mv, base };
 }
@@ -305,8 +314,10 @@ function renderSplit() {
   if (!p || !ready) return;
   const f = placedFrame(p);
   // Manual cut: back to the middle when another part is selected.
-  if (cutState.part !== p) Object.assign(cutState, { part: p, touched: false, at: (f.bt.max[cutState.axis] - f.bt.min[cutState.axis]) / 2 });
   const len = f.bt.max[cutState.axis] - f.bt.min[cutState.axis];
+  // Back to the middle for another part, or when the part was turned (another length).
+  if (cutState.part !== p || Math.abs(cutState.len - len) > 0.5) Object.assign(cutState, { part: p, touched: false, at: len / 2 });
+  cutState.len = len;
   cutState.at = Math.max(0, Math.min(len, cutState.at));
   $<HTMLSelectElement>('cutAxis').value = String(cutState.axis);
   Object.assign($<HTMLInputElement>('cutPos'), { max: String(len), value: String(cutState.at) });
@@ -879,7 +890,7 @@ const PRINT_FIELDS: Field[] = [
   { key: 'adaptiveLayers', label: 'f.adaptiveLayers', kind: 'check', full: true },
   { key: 'toolTilt', label: 'f.toolTilt', kind: 'check', full: true },
   { key: 'maxTilt', label: 'f.maxTilt', kind: 'number', step: 5, min: 0 },
-  { key: 'baseCut', label: 'f.baseCut', kind: 'number', step: 1, min: 0 },
+  { key: 'supports', label: 'f.supports', kind: 'check', full: true },
   { key: 'walls', label: 'f.walls', kind: 'number', step: 1, min: 1 },
   { key: 'wallSpacing', label: 'f.wallSpacing', kind: 'number', step: 0.5, min: 0.1 },
   { key: 'tolerance', label: 'f.tolerance', kind: 'number', step: 0.05, min: 0 },
@@ -1101,6 +1112,7 @@ interface BuildMsg {
   ext: Uint8Array;
   cc: Float32Array;
   ptp: Uint8Array;
+  sup: Uint8Array;
   meta: Toolpath;
   src: string;
   offset: [number, number, number];
@@ -1177,7 +1189,7 @@ async function build(): Promise<BuildMsg | null> {
   lastBuild = r;
   viewer.setModel(r.mesh, r.offset, parseFloat($<HTMLInputElement>('opacity').value));
   viewer.setBed(robot.bedSizeX, robot.bedSizeY, [robot.bedCenterX, robot.bedCenterY, robot.bedTopZ]);
-  viewer.setToolpath(r.xyz, r.ext, r.meta.layerStart, r.offset);
+  viewer.setToolpath(r.xyz, r.ext, r.meta.layerStart, r.offset, r.sup);
   viewer.setStartMarker(r.xyz.length ? [r.xyz[0] + r.offset[0], r.xyz[1] + r.offset[1], r.xyz[2] + r.offset[2]] : null);
   viewer.setZones(r.zones, r.mesh, r.offset);
   viewer.setCollisions(

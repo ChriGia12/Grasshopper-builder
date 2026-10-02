@@ -6,6 +6,7 @@ import { buildToolpath } from '../src/core/toolpath';
 import { applyMatrix, dropToOrigin, mergeMeshes, rotX, weld, type MeshData } from '../src/core/mesh';
 import { DEFAULT_PRINT, type PrintSettings } from '../src/core/settings';
 import { box, cylinder } from './fixtures';
+import { FaceGrid, pointTriangle } from '../src/core/tilt';
 
 const s: PrintSettings = { ...DEFAULT_PRINT, adaptiveLayers: true, minContourLength: 0, tolerance: 0.05 };
 type V3 = [number, number, number];
@@ -106,15 +107,20 @@ describe('an open shell whose edge is not flat (like an upside-down hull)', () =
   const shell = weld({ positions: open.positions, indices: open.indices.slice(0, open.indices.length - 48 * 3) });
   const tilted = dropToOrigin(applyMatrix(shell, rotX(15)));
 
-  it('every loop goes all the way round the part', () => {
+  it('every printed point lies on the mesh: no base invented under it, rings round the part above', () => {
     const tp = buildToolpath(tilted, { ...s, mode: 'planar' });
-    expect(tp.travels).toBe(0);
-    const spans = tp.layerStart.map((st, k) => {
-      const loop = tp.points.slice(st, tp.layerStart[k + 1] ?? tp.points.length);
-      return Math.max(...loop.map((p) => p.x)) - Math.min(...loop.map((p) => p.x));
-    });
-    // the dome is 120 mm across: the loops on its lower half all span most of it
-    for (const w of spans.slice(0, Math.floor(spans.length / 2))) expect(w).toBeGreaterThan(90);
+    const grid = new FaceGrid(tilted, 12);
+    const P = tilted.positions;
+    const I = tilted.indices;
+    const V = (k: number): [number, number, number] => [P[k * 3], P[k * 3 + 1], P[k * 3 + 2]];
+    for (const q of tp.points) {
+      if (!q.e) continue;
+      // the nozzle sits half a bead lower than where the surface was cut
+      const at: [number, number, number] = [q.x, q.y, q.z + s.layerHeight / 2 - s.firstLayerZ];
+      const t = grid.nearest(at, 20);
+      expect(t).toBeGreaterThanOrEqual(0);
+      expect(pointTriangle(at, V(I[t * 3]), V(I[t * 3 + 1]), V(I[t * 3 + 2]))).toBeLessThan(1.5);
+    }
   });
 });
 

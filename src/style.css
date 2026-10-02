@@ -201,6 +201,7 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
 .sw { display: inline-block; width: 18px; height: 4px; border-radius: 2px; margin-left: 6px; }
 .sw.grad { background: linear-gradient(90deg, #3b6cf0, #3bf08a, #f0d23b, #f04b3b); }
 .sw.travel { background: #ff3b9d; }
+.sw.support { background: #9aa0a8; }
 .sw.over { background: #ff8a1f; }
 .sw.island { background: #ff2d2d; }
 .sw.thin { background: #ffe03b; }

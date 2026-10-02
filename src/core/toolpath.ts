@@ -9,6 +9,7 @@ import { sliceAt, type Contour, type Layer } from './slicer';
 import { buildWalls, collapseThinWalls, islands, offsetContours } from './walls';
 import { scanFill, serpentine } from './zigzag';
 import { buildRings } from './rings';
+import { addSupports } from './supports';
 
 export interface PathPoint {
   x: number;
@@ -18,6 +19,8 @@ export interface PathPoint {
   e: boolean;
   /** tool tilt C for this point (surface mode with tilt); otherwise the robot setting */
   c?: number;
+  /** printing a removable support, not the part */
+  support?: boolean;
   /** reached with a PTP (move between two parts, above them) instead of a LIN */
   ptp?: boolean;
 }
@@ -52,6 +55,10 @@ export interface LayerSummary {
   maxIslands: number;
   openLayers: number; // layers with open contours (non-watertight mesh)
   emptyLayers: number;
+  /** Contours shorter than minContourLength left out (only if the user set a minimum). */
+  dropped: number;
+  /** Layers where supports were added. */
+  supportLayers: number;
 }
 
 /** Contour taken at mid-bead height (i + ½)·h; nozzle at firstLayerZ + i·h above the table. */
@@ -61,14 +68,18 @@ export function sliceForPrint(mesh: MeshData, s: PrintSettings): LayerSummary {
   const n = Math.max(1, Math.round(height / s.layerHeight));
   const zs = Array.from({ length: n }, (_, i) => b.min[2] + (i + 0.5) * s.layerHeight);
   const raw = sliceAt(mesh, zs);
+  // The whole mesh is printed: every section as it is (no base invented under it, no sliver
+  // dropped). Only a minimum length set on purpose by the user leaves contours out, and says so.
+  let dropped = 0;
   const layers = raw.map((l, i) => ({
     z: s.firstLayerZ + i * s.layerHeight,
     // A solid filled layer must keep its real outline: no shell → mid-line collapse there.
-    contours: collapseThinWalls(l.contours, s.mode === 'zigzag' ? 0 : s.thinWallMax).filter(
-      (c) => polylineLength(c.pts, c.closed) >= s.minContourLength,
-    ),
+    contours: collapseThinWalls(l.contours, s.mode === 'zigzag' ? 0 : s.thinWallMax).filter((c) => {
+      const keep = polylineLength(c.pts, c.closed) >= s.minContourLength;
+      if (!keep) dropped++;
+      return keep;
+    }),
   }));
-  fixEdgeSlivers(layers, s.wallSpacing / 2);
   let maxIslands = 0;
   let openLayers = 0;
   let emptyLayers = 0;
@@ -78,25 +89,10 @@ export function sliceForPrint(mesh: MeshData, s: PrintSettings): LayerSummary {
     if (l.contours.some((c) => !c.closed)) openLayers++;
     if (!l.contours.length) emptyLayers++;
   }
-  const spiral = spiralRange(layers);
-  return { layers, singleLoop: spiral !== null, spiral, maxIslands, openLayers, emptyLayers };
-}
-
-/** Mean width of a closed loop's region (2·area / perimeter). */
-const loopWidth = (c: Contour) => (c.closed ? (2 * Math.abs(signedArea(c.pts))) / polylineLength(c.pts, true) : 0);
-
-/**
- * Rounded bottoms and rims slice into slivers thinner than a bead (e.g. two half-rings at the
- * first layer), which would print as scraps joined by lifted travels. The bottom layers take the
- * contour of the first full layer, so printing starts with the whole footprint on the table
- * (as Tavolino1 does); sliver layers at the top are dropped.
- */
-function fixEdgeSlivers(layers: Layer[], minWidth: number) {
-  const sliver = (l: Layer) => l.contours.length > 0 && l.contours.every((c) => loopWidth(c) < minWidth);
-  const first = layers.findIndex((l) => l.contours.length > 0 && !sliver(l));
-  if (first < 0) return;
-  for (let i = 0; i < first; i++) layers[i].contours = layers[first].contours.map((c) => ({ ...c, pts: c.pts.map((p) => [...p] as Vec2) }));
-  while (layers.length > first + 1 && (sliver(layers[layers.length - 1]) || !layers[layers.length - 1].contours.length)) layers.pop();
+  // Supports are added after the counts above: they are not part of the mesh.
+  const supportLayers = s.supports ? addSupports(layers, s.layerHeight, s.wallSpacing, s.overhangAngle) : 0;
+  const spiral = supportLayers ? null : spiralRange(layers);
+  return { layers, singleLoop: spiral !== null, spiral, maxIslands, openLayers, emptyLayers, dropped, supportLayers };
 }
 
 const isSingleLoop = (l: Layer) => l.contours.length === 1 && l.contours[0].closed;
@@ -150,6 +146,8 @@ export function buildToolpath(
   if (summary.openLayers)
     warnings.push(msg('w.openLayers', { n: summary.openLayers }));
   if (summary.emptyLayers) warnings.push(msg('w.emptyLayers', { n: summary.emptyLayers }));
+  if (summary.dropped) warnings.push(msg('w.dropped', { n: summary.dropped, mm: s.minContourLength }));
+  if (summary.supportLayers) warnings.push(msg('w.supports', { n: summary.supportLayers }));
 
   const b = computeBounds(mesh);
   const start: Vec2 = startTarget ?? [b.min[0], b.min[1]];
@@ -347,10 +345,12 @@ export function buildPlanar(tp: Toolpath, layers: Layer[], s: PrintSettings, sta
       if (last?.e && layer.z > last.z && hop <= Math.max(s.wallSpacing, s.maxBridge)) {
         const arc: Vec2[] = [[last.x, last.y], ...pts];
         const ramped = s.layerRamp > 0 ? rampPoints(arc, () => layer.z, last.z, s.layerRamp) : arc.map((q) => ({ x: q[0], y: q[1], z: layer.z, e: true }));
-        for (const q of ramped.slice(1)) push(tp, q);
+        for (const q of ramped.slice(1)) push(tp, c.support ? { ...q, support: true } : q);
       } else {
-        moveTo(tp, pts[0], layer.z, s, undefined, inside);
-        for (let i = 1; i < pts.length; i++) push(tp, { x: pts[i][0], y: pts[i][1], z: layer.z, e: true });
+        // Supports are removed after printing: a short hop from one to the next is printed too.
+        if (c.support && last?.e && last.z === layer.z && hop <= 3 * s.wallSpacing) push(tp, { x: pts[0][0], y: pts[0][1], z: layer.z, e: true, support: true });
+        else moveTo(tp, pts[0], layer.z, s, undefined, inside);
+        for (let i = 1; i < pts.length; i++) push(tp, { x: pts[i][0], y: pts[i][1], z: layer.z, e: true, ...(c.support ? { support: true } : {}) });
       }
       cur = pts[pts.length - 1];
     }
@@ -557,8 +557,17 @@ function buildZigzag(tp: Toolpath, mesh: MeshData, layers: Layer[], s: PrintSett
   const printLayer = (region: Contour[], li: number, zAt: ZAt, step: number) => {
     tp.layerStart.push(tp.points.length);
     printed++;
-    // Islands smaller than ~3×3 beads cannot be filled.
-    const parts = islands(region).filter((g) => Math.abs(signedArea(g[0].pts)) >= 9 * w * w);
+    // Islands smaller than ~3×3 beads cannot be filled with passes: they are still printed, as
+    // their outline (the mesh is printed whole).
+    const all = islands(region);
+    const small = all.filter((g) => Math.abs(signedArea(g[0].pts)) < 9 * w * w);
+    for (const g of small)
+      for (const c of g) {
+        const loop = prepareLoop(c, s, cur);
+        printLine(tp, [...loop, loop[0]], zAt, s, step, insideRegion(g, s), false);
+        cur = loop[0];
+      }
+    const parts = all.filter((g) => !small.includes(g));
     const angle = chooseAngle(parts, li);
     while (parts.length) {
       const island = parts.splice(nearestIndex(parts.map((p) => p[0]), cur), 1)[0];

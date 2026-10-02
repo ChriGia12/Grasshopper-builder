@@ -15,7 +15,7 @@ import { countTiltX, type Toolpath } from './toolpath';
 type V3 = [number, number, number];
 
 /** Distance from q to the triangle (a, b, c). */
-function pointTriangle(q: V3, a: V3, b: V3, c: V3): number {
+export function pointTriangle(q: V3, a: V3, b: V3, c: V3): number {
   const ab = [b[0] - a[0], b[1] - a[1], b[2] - a[2]];
   const ac = [c[0] - a[0], c[1] - a[1], c[2] - a[2]];
   const ap = [q[0] - a[0], q[1] - a[1], q[2] - a[2]];
@@ -43,7 +43,7 @@ function pointTriangle(q: V3, a: V3, b: V3, c: V3): number {
 }
 
 /** Nearest-face lookup on a uniform grid of the triangles' bounding boxes. */
-class FaceGrid {
+export class FaceGrid {
   private cells = new Map<number, number[]>();
   private readonly min: V3;
   constructor(
