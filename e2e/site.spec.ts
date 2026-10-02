@@ -149,6 +149,18 @@ test('the cut section is always there: a manual horizontal cut gives two pieces'
   await expect(page.locator('#modelInfo')).toContainText('80.0 × 60.0 × 25.0 mm');
 });
 
+test('pieces that do not fit where they are are laid out on the table by themselves', async ({ page }) => {
+  // A long bar across the table, cut along its length: the halves would overlap where they are.
+  await addPart(page, 'barra.stl', 60, 500, 30);
+  await expect(download(page)).toBeEnabled();
+  await page.locator('#cutAxis').selectOption('0');
+  await page.locator('#cutApply').click();
+  await expect(page.locator('#partList li')).toHaveCount(2);
+  await expect(download(page)).toBeEnabled();
+  await expect(page.locator('#warnings')).not.toContainText('si sovrappongono');
+  await expect(page.locator('#warnings')).not.toContainText('esce dal piano');
+});
+
 test('a part drawn in metres is flagged and scaled ×1000', async ({ page }) => {
   await addPart(page, 'metri.stl', 0.08, 0.06, 0.02);
   await expect(page.locator('#modelNotes')).toContainText('probabilmente il file è in metri');

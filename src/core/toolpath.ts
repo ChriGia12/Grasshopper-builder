@@ -339,8 +339,19 @@ export function buildPlanar(tp: Toolpath, layers: Layer[], s: PrintSettings, sta
       const dStart = Math.hypot(pts[0][0] - cur[0], pts[0][1] - cur[1]);
       const dEnd = Math.hypot(pts[pts.length - 1][0] - cur[0], pts[pts.length - 1][1] - cur[1]);
       if (dEnd < dStart) pts = pts.reverse();
-      moveTo(tp, pts[0], layer.z, s, undefined, inside);
-      for (let i = 1; i < pts.length; i++) push(tp, { x: pts[i][0], y: pts[i][1], z: layer.z, e: true });
+      const last = tp.points[tp.points.length - 1];
+      // Open arc (the edge of an open shell): the arc of the layer below ends right under the start
+      // of this one — no region to check, but a step of at most one bead stays on the wall just
+      // printed. It is printed, climbing along the arc like the ramp of a closed loop.
+      const hop = last ? Math.hypot(pts[0][0] - last.x, pts[0][1] - last.y) : Infinity;
+      if (last?.e && layer.z > last.z && hop <= Math.max(s.wallSpacing, s.maxBridge)) {
+        const arc: Vec2[] = [[last.x, last.y], ...pts];
+        const ramped = s.layerRamp > 0 ? rampPoints(arc, () => layer.z, last.z, s.layerRamp) : arc.map((q) => ({ x: q[0], y: q[1], z: layer.z, e: true }));
+        for (const q of ramped.slice(1)) push(tp, q);
+      } else {
+        moveTo(tp, pts[0], layer.z, s, undefined, inside);
+        for (let i = 1; i < pts.length; i++) push(tp, { x: pts[i][0], y: pts[i][1], z: layer.z, e: true });
+      }
       cur = pts[pts.length - 1];
     }
   }

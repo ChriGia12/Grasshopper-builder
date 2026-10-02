@@ -108,3 +108,29 @@ describe('always the same way round', () => {
     expect(senses(tp).every((x) => x > 0)).toBe(true);
   });
 });
+
+describe('open shells (sections are open arcs)', () => {
+  // A half tube standing up, open (no caps): every layer is one open arc.
+  function halfTube(r: number, h: number, seg = 24, rows = 12) {
+    const pos: number[] = [];
+    const idx: number[] = [];
+    for (let i = 0; i <= rows; i++)
+      for (let j = 0; j <= seg; j++) {
+        const a = (j / seg) * Math.PI;
+        pos.push(r * Math.cos(a), r * Math.sin(a), (i / rows) * h);
+      }
+    for (let i = 0; i < rows; i++)
+      for (let j = 0; j < seg; j++) {
+        const a = i * (seg + 1) + j;
+        idx.push(a, a + 1, a + seg + 2, a, a + seg + 2, a + seg + 1);
+      }
+    return weld({ positions: new Float32Array(pos), indices: new Uint32Array(idx) });
+  }
+
+  it('the arcs are joined layer to layer on a ramp: no lifted travel', () => {
+    const tp = buildToolpath(halfTube(50, 30), { ...DEFAULT_PRINT, mode: 'planar' });
+    expect(tp.layerStart.length).toBeGreaterThan(10);
+    expect(tp.travels).toBe(0);
+    expect(tp.points.slice(1).every((p) => p.e)).toBe(true);
+  });
+});

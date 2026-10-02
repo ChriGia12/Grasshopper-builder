@@ -73,6 +73,8 @@ interface Part {
   placed: boolean;
   /** From a saved project: orientation to pick again once the analysis is done. */
   wantDown?: [number, number, number];
+  /** After a cut: the orientation to keep if it prints without supports, otherwise the best one. */
+  preferDown?: [number, number, number];
   /** Not printable whole without supports: where to cut it in two (from the analysis). */
   split?: SplitPlan | null;
   /** A piece of a cut part: the file scale and the cuts that made it (scale is then locked). */
@@ -363,7 +365,7 @@ async function cutPart(p: Part, n: [number, number, number], d: number, downs: [
       orientations: [],
       orientIdx: 0,
       manual: [...IDENTITY] as Mat3,
-      wantDown: downs[i],
+      preferDown: downs[i],
       placed: i === 0, // the first piece keeps the place of the part, the second goes beside it
       split: null,
     };
@@ -378,6 +380,68 @@ async function cutPart(p: Part, n: [number, number, number], d: number, downs: [
   selectPart(idx);
   fitNext = true;
   await analyze(pieces);
+  // The pieces must fit: overlapping or off the table, every part is laid out again.
+  if (arrangeNeeded()) {
+    arrangeParts();
+    selectPart(Math.min(active, parts.length - 1));
+    fitNext = true;
+    await build();
+  }
+}
+
+/** Footprint of a part on the plate in BASE: [xMin, yMin, xMax, yMax]. */
+function footprint(p: Part): [number, number, number, number] {
+  const [w, h] = plannedSize(p);
+  return [p.x - w / 2, p.y - h / 2, p.x + w / 2, p.y + h / 2];
+}
+
+/** Some parts overlap (closer than a gap that lets the mandrino pass) or leave the table. */
+function arrangeNeeded(): boolean {
+  if (robot.placement === 'file' || parts.some((p) => !p.orientations.length)) return false;
+  const boxes = parts.map(footprint);
+  const g = PART_GAP / 2;
+  const [bx0, by0] = [robot.bedCenterX - robot.bedSizeX / 2, robot.bedCenterY - robot.bedSizeY / 2];
+  const [bx1, by1] = [bx0 + robot.bedSizeX, by0 + robot.bedSizeY];
+  if (boxes.some((b) => b[0] < bx0 || b[1] < by0 || b[2] > bx1 || b[3] > by1)) return true;
+  return boxes.some((a, i) => boxes.slice(i + 1).some((b) => a[0] - g < b[2] && b[0] - g < a[2] && a[1] - g < b[3] && b[1] - g < a[3]));
+}
+
+/**
+ * Lays the parts out on the table in the order of the list: side by side along Y (the long side),
+ * a new column along X when one is full, PART_GAP apart (less if they would not fit), the whole
+ * group centred on the table.
+ */
+function arrangeParts() {
+  const sizes = parts.map(plannedSize);
+  const tryGap = (gap: number) => {
+    const pos: [number, number][] = [];
+    const H = robot.bedSizeY;
+    let x = 0;
+    let y = 0;
+    let col = 0;
+    sizes.forEach(([w, h]) => {
+      if (y > 0 && y + h > H) {
+        x += col + gap;
+        y = 0;
+        col = 0;
+      }
+      pos.push([x + w / 2, y + h / 2]);
+      y += h + gap;
+      col = Math.max(col, w);
+    });
+    const xs = pos.map((q, i) => [q[0] - sizes[i][0] / 2, q[0] + sizes[i][0] / 2]).flat();
+    const ys = pos.map((q, i) => [q[1] - sizes[i][1] / 2, q[1] + sizes[i][1] / 2]).flat();
+    const [w, h] = [Math.max(...xs) - Math.min(...xs), Math.max(...ys) - Math.min(...ys)];
+    return { pos, w, h, x0: Math.min(...xs), y0: Math.min(...ys) };
+  };
+  let lay = tryGap(PART_GAP);
+  for (const gap of [40, 20]) if (lay.w > robot.bedSizeX || lay.h > robot.bedSizeY) lay = tryGap(gap);
+  parts.forEach((p, i) => {
+    p.x = Math.round(lay.pos[i][0] - lay.x0 - lay.w / 2 + robot.bedCenterX);
+    p.y = Math.round(lay.pos[i][1] - lay.y0 - lay.h / 2 + robot.bedCenterY);
+    p.placed = true;
+  });
+  saveRobot();
 }
 
 function applyManualCut() {
@@ -613,8 +677,11 @@ async function analyze(which: Part[] = parts) {
     p.orientations = res.orientations;
     p.split = res.split;
     // A saved project brings its orientation back (with its manual turns); otherwise the best one.
-    const want = p.wantDown;
-    const k = want ? res.orientations.findIndex((o) => o.down[0] * want[0] + o.down[1] * want[1] + o.down[2] * want[2] > 0.999) : -1;
+    const want = p.wantDown ?? p.preferDown;
+    let k = want ? res.orientations.findIndex((o) => o.down[0] * want[0] + o.down[1] * want[1] + o.down[2] * want[2] > 0.999) : -1;
+    // A piece of a cut keeps its turn only when it prints without supports that way.
+    if (k >= 0 && !p.wantDown && !res.orientations[k].valid) k = -1;
+    p.preferDown = undefined;
     if (k >= 0) p.orientIdx = k;
     else {
       p.orientIdx = 0;
