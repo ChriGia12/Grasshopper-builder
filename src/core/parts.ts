@@ -2,6 +2,7 @@
 // whole second one, and so on. Between two parts the extruder is off and the robot goes straight
 // up (LIN, exact stop), moves above the next part with a PTP and goes straight down (LIN) to
 // where that part starts; the extruder is switched on again with its first printed move.
+import { msg } from '../i18n';
 import type { MeshData } from './mesh';
 import type { PrintSettings } from './settings';
 import type { Vec2 } from './polyline';
@@ -43,7 +44,8 @@ function partMesh(mesh: MeshData, box: PartBox, offset: [number, number, number]
  * where the first part starts (part frame); each next part starts near where the previous ended.
  */
 export function printPartsInTurn(mesh: MeshData, s: PrintSettings, boxes: PartBox[], offset: [number, number, number], start?: Vec2): Toolpath {
-  const meshes = boxes.map((b) => partMesh(mesh, b, offset)).filter((m): m is MeshData => !!m);
+  const all = boxes.map((b) => partMesh(mesh, b, offset));
+  const meshes = all.filter((m): m is MeshData => !!m);
   const out: Toolpath = {
     points: [],
     mode: s.mode,
@@ -100,6 +102,10 @@ export function printPartsInTurn(mesh: MeshData, s: PrintSettings, boxes: PartBo
     for (const p of tp.points) if (p.e) zTop = Math.max(zTop, p.z);
     const end = tp.points[tp.points.length - 1];
     from = [end.x, end.y];
+  });
+  // A part with nothing left (e.g. lower than the base cut) must not vanish without a word.
+  all.forEach((m, k) => {
+    if (!m) out.warnings.push(msg('w.partEmpty', { i: k + 1 }));
   });
   if (topArea) {
     out.coverage = coveredArea / topArea;

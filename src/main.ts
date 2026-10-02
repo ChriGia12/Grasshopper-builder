@@ -498,6 +498,12 @@ function applyBaseCut() {
   if (!p?.orientations.length) return;
   const lift = Math.ceil(baseLift(p));
   if (lift <= 0) return;
+  // This cut keeps everything: the old base cut (which throws material away) is not wanted too.
+  if (print.baseCut > 0) {
+    print.baseCut = 0;
+    save('gb.print', print);
+    renderPrintFields();
+  }
   const f = placedFrame(p);
   const n: [number, number, number] = [f.M[6], f.M[7], f.M[8]];
   const O = orientedMatrix(p);

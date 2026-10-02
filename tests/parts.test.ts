@@ -84,3 +84,12 @@ describe('several parts, one after the other', () => {
     expect(one.toolpath.points.some((p) => p.ptp)).toBe(false);
   });
 });
+
+describe('a part lower than the base cut', () => {
+  it('is reported, not silently dropped', () => {
+    // a 5 mm block and a 20 mm block 70 mm apart; base cut at 10 mm leaves nothing of the first
+    const two = weld(mergeMeshes([box(50, 40, 5), box(50, 40, 20, 0, 110, 0)]));
+    const r = runBuild(two, I, { ...print, baseCut: 10 }, robot, 't', bodies, boxes);
+    expect(r.toolpath.warnings.map((w) => w.k)).toContain('w.partEmpty');
+  });
+});
