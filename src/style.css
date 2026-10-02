@@ -230,6 +230,8 @@ button.active { background: var(--accent); color: var(--accent-ink); border-colo
 .parts .title { flex: 1; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .parts button { padding: 0 8px; line-height: 1.6; }
 .project-row { display: flex; gap: 8px; margin-top: 10px; }
+.arrange-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-top: 6px; }
+.arrange-row .hint { margin: 0; font-size: 12px; }
 .cut-box { margin-top: 12px; padding: 10px 12px; border: 1px solid var(--border); border-radius: 8px; font-size: 13px; display: flex; flex-direction: column; gap: 6px; }
 .cut-box .hint { margin: 0; }
 .cut-row { display: flex; align-items: center; gap: 6px; }

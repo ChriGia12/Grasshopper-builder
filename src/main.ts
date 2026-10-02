@@ -635,6 +635,7 @@ function movePart(i: number, d: -1 | 1) {
 
 function renderParts() {
   $('partList').hidden = !hasParts();
+  $('arrangeRow').hidden = !hasParts();
   $<HTMLButtonElement>('saveProject').disabled = !hasParts();
   $('partList').replaceChildren(
     ...parts.map((p, i) => {
@@ -1403,6 +1404,59 @@ function setPick(mode: 'none' | 'place' | 'start') {
 }
 $('placeBtn').onclick = () => setPick('place');
 $('startBtn').onclick = () => setPick('start');
+// ---------- drag parts on the table ----------
+
+/** The part whose footprint contains (x, y) in BASE (the selected one first). */
+function partAt(x: number, y: number): Part | undefined {
+  if (robot.placement === 'file') return undefined;
+  const inside = (p: Part) => {
+    if (!p.orientations.length) return false;
+    const b = footprint(p);
+    return x >= b[0] && x <= b[2] && y >= b[1] && y <= b[3];
+  };
+  const c = cur();
+  return c && inside(c) ? c : parts.find(inside);
+}
+
+function fits(b: [number, number, number, number]) {
+  const [x0, y0] = [robot.bedCenterX - robot.bedSizeX / 2, robot.bedCenterY - robot.bedSizeY / 2];
+  return b[0] >= x0 && b[1] >= y0 && b[2] <= x0 + robot.bedSizeX && b[3] <= y0 + robot.bedSizeY;
+}
+
+let drag: { p: Part; from: [number, number]; at: [number, number] } | null = null;
+viewer.grab = (x, y) => {
+  const p = partAt(x, y);
+  if (!p) return false;
+  if (p !== cur()) selectPart(parts.indexOf(p));
+  drag = { p, from: [x, y], at: [p.x, p.y] };
+  viewer.setDragBox(footprint(p), fits(footprint(p)));
+  return true;
+};
+viewer.onDrag = (x, y) => {
+  if (!drag) return;
+  drag.p.x = Math.round(drag.at[0] + x - drag.from[0]);
+  drag.p.y = Math.round(drag.at[1] + y - drag.from[1]);
+  viewer.setDragBox(footprint(drag.p), fits(footprint(drag.p)));
+};
+viewer.onDrop = () => {
+  if (!drag) return;
+  const { p, at } = drag;
+  drag = null;
+  viewer.setDragBox(null);
+  if (Math.hypot(p.x - at[0], p.y - at[1]) < 1) return;
+  Object.assign(robot, { placement: 'origin', originX: p.x, originY: p.y });
+  saveRobot();
+  renderRobotFields();
+  build();
+};
+$('arrangeBtn').onclick = () => {
+  if (!hasParts() || parts.some((p) => !p.orientations.length)) return;
+  arrangeParts();
+  selectPart(Math.max(0, active));
+  fitNext = true;
+  build();
+};
+
 viewer.onPick = (mode, x, y) => {
   if (mode === 'place') {
     Object.assign(robot, { placement: 'origin', originX: Math.round(x), originY: Math.round(y) });

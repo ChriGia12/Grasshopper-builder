@@ -64,6 +64,10 @@
             <small><span data-i18n="drop.hint">Uno o più pezzi, mesh o BREP: ogni file aggiunge un pezzo. Robot, piano e mandrino sono già nella cella.</span><br>STL · OBJ · PLY · 3DM · STEP · IGES · BREP</small>
           </label>
           <ul id="partList" class="parts" hidden></ul>
+          <div class="arrange-row" id="arrangeRow" hidden>
+            <span class="hint" data-i18n="parts.dragHint">Trascina i pezzi nella vista per spostarli.</span>
+            <button class="ghost small" id="arrangeBtn" data-i18n="parts.arrange">Disponi sul piano</button>
+          </div>
           <div class="scale-row" id="scaleRow" hidden>
             <label for="scaleInput" data-i18n="scale.label">Scala</label>
             <input type="number" id="scaleInput" step="any" min="0" />

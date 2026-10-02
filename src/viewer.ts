@@ -33,6 +33,41 @@ export class Viewer {
   private bedZ = 0;
   /** Called with BASE coordinates when the user clicks the bed in a pick mode. */
   onPick: ((mode: 'place' | 'start', x: number, y: number) => void) | null = null;
+  /** Pressing on the table at (x, y) in BASE: true when it grabs a part to drag. */
+  grab: ((x: number, y: number) => boolean) | null = null;
+  onDrag: ((x: number, y: number) => void) | null = null;
+  onDrop: ((x: number, y: number) => void) | null = null;
+  private dragging = false;
+  private dragBox: THREE.LineLoop | null = null;
+
+  /** Point of the table plane under the pointer (BASE), or null. */
+  bedPoint(clientX: number, clientY: number): [number, number] | null {
+    const r = this.renderer.domElement.getBoundingClientRect();
+    const ndc = new THREE.Vector2(((clientX - r.left) / r.width) * 2 - 1, -((clientY - r.top) / r.height) * 2 + 1);
+    const ray = new THREE.Raycaster();
+    ray.setFromCamera(ndc, this.camera);
+    const hit = new THREE.Vector3();
+    return ray.ray.intersectPlane(new THREE.Plane(new THREE.Vector3(0, 0, 1), -this.bedZ), hit) ? [hit.x, hit.y] : null;
+  }
+
+  /** Footprint of the part being dragged: [xMin, yMin, xMax, yMax] on the table, red if it does not fit. */
+  setDragBox(box: [number, number, number, number] | null, ok = true) {
+    if (this.dragBox) {
+      this.scene.remove(this.dragBox);
+      this.dragBox.geometry.dispose();
+      this.dragBox = null;
+    }
+    if (!box) return;
+    const z = this.bedZ + 0.5;
+    const g = new THREE.BufferGeometry().setFromPoints([
+      new THREE.Vector3(box[0], box[1], z),
+      new THREE.Vector3(box[2], box[1], z),
+      new THREE.Vector3(box[2], box[3], z),
+      new THREE.Vector3(box[0], box[3], z),
+    ]);
+    this.dragBox = new THREE.LineLoop(g, new THREE.LineBasicMaterial({ color: ok ? 0x34c38f : 0xff3b3b, depthTest: false }));
+    this.scene.add(this.dragBox);
+  }
   private layerStart: number[] = [];
   private xyz: Float32Array | null = null;
   private offset: [number, number, number] = [0, 0, 0];
@@ -76,6 +111,35 @@ export class Viewer {
       const hit = new THREE.Vector3();
       if (ray.ray.intersectPlane(new THREE.Plane(new THREE.Vector3(0, 0, 1), -this.bedZ), hit)) this.onPick?.(this.pickMode, hit.x, hit.y);
     });
+
+    // Dragging parts on the table: a press on a part (decided by the page through `grab`) moves
+    // it instead of turning the view; while dragging its footprint follows the pointer.
+    el.addEventListener(
+      'pointerdown',
+      (e) => {
+        if (e.button !== 0 || this.pickMode !== 'none' || !this.grab) return;
+        const at = this.bedPoint(e.clientX, e.clientY);
+        if (!at || !this.grab(at[0], at[1])) return;
+        this.controls.enabled = false;
+        this.dragging = true;
+        el.setPointerCapture(e.pointerId);
+      },
+      { capture: true },
+    );
+    el.addEventListener('pointermove', (e) => {
+      if (!this.dragging) return;
+      const at = this.bedPoint(e.clientX, e.clientY);
+      if (at) this.onDrag?.(at[0], at[1]);
+    });
+    const end = (e: PointerEvent) => {
+      if (!this.dragging) return;
+      this.dragging = false;
+      this.controls.enabled = true;
+      const at = this.bedPoint(e.clientX, e.clientY);
+      this.onDrop?.(at?.[0] ?? NaN, at?.[1] ?? NaN);
+    };
+    el.addEventListener('pointerup', end);
+    el.addEventListener('pointercancel', end);
 
     this.applyTheme();
     matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => this.applyTheme());
