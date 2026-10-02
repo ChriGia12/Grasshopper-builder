@@ -11,7 +11,7 @@ import type { Toolpath } from './core/toolpath';
 import { cellBodies, type Body, type CollisionReport } from './core/collision';
 import type { Zones } from './core/zones';
 import type { PartBox } from './core/parts';
-import { splitPiece, type SplitPlan } from './core/split';
+import { cutPiece, type SplitPlan } from './core/split';
 import { Viewer } from './viewer';
 import { applyStatic, getLang, locale, msg, MsgError, setLang, t, tm, type Msg } from './i18n';
 import type { WorkerRequest } from './worker';
@@ -275,77 +275,102 @@ function selectPart(i: number) {
 // a cut that gives two pieces that can; the plane is shown in the view and one click applies it:
 // two parts, each already turned the way it prints best, printed one after the other.
 
-const axisSize = (p: Part, axis: number) => {
-  const b = computeBounds(p.mesh);
-  return b.max[axis] - b.min[axis];
-};
+
+/** Manual cut of the selected part, in the frame of the plate: axis and distance from its start. */
+const cutState = { axis: 2 as 0 | 1 | 2, at: 0, touched: false, part: null as Part | null };
+
+/** The selected part as it stands on the plate: rotation from its file, and its extent. */
+function placedFrame(p: Part) {
+  const M = mulMat3(rotZ(p.rotZ), orientedMatrix(p));
+  const bt = computeBounds(applyMatrix(p.mesh, M));
+  const mv = (v: number[]) => [0, 1, 2].map((k) => M[k * 3] * v[0] + M[k * 3 + 1] * v[1] + M[k * 3 + 2] * v[2]) as [number, number, number];
+  // From the placed part's own frame to BASE (where the view draws it).
+  const r = lastBuild;
+  const xy = parts.length === 1 && r ? [r.offset[0], r.offset[1]] : [p.x, p.y];
+  const base = (q: [number, number, number]): [number, number, number] => [
+    q[0] - (bt.min[0] + bt.max[0]) / 2 + xy[0],
+    q[1] - (bt.min[1] + bt.max[1]) / 2 + xy[1],
+    q[2] - bt.min[2] - print.baseCut + (r?.offset[2] ?? 0),
+  ];
+  return { M, bt, mv, base };
+}
 
 function renderSplit() {
   const p = cur();
-  const plan = p?.split;
-  $('splitBox').hidden = !plan;
+  const ready = !!p && p.orientations.length > 0;
+  $('cutBox').hidden = !ready;
   viewer.setCutPlane(null);
-  if (!p || !plan) return;
-  const pct = Math.round((100 * plan.at) / plan.length);
-  const lines = plan.pieces.map((q, i) =>
-    t('split.piece', {
-      i: i + 1,
-      how: t(q.onCut ? 'split.onCut' : 'split.flip'),
-      mode: t(`split.mode.${q.mode}`),
-      ok: q.valid ? t('split.ok') : t('split.over', { p: (q.overhang * 100).toFixed(1), n: q.islands }),
-    }),
-  );
-  $('splitText').textContent = t(plan.valid ? 'split.where' : 'split.wherePartial', {
-    len: Math.round(plan.length),
-    at: Math.round(plan.at),
-    pct,
-  });
-  $('splitPieces').replaceChildren(...lines.map((l) => li(l)));
-  // The plane in the view (one part on the plate: the view shows exactly that part).
-  const r = lastBuild;
-  if (parts.length !== 1 || !r || !p.orientations.length) return;
-  const M = mulMat3(rotZ(p.rotZ), orientedMatrix(p));
-  const mv = (v: number[]) => [0, 1, 2].map((k) => M[k * 3] * v[0] + M[k * 3 + 1] * v[1] + M[k * 3 + 2] * v[2]) as [number, number, number];
+  if (!p || !ready) return;
+  const f = placedFrame(p);
+  // Manual cut: back to the middle when another part is selected.
+  if (cutState.part !== p) Object.assign(cutState, { part: p, touched: false, at: (f.bt.max[cutState.axis] - f.bt.min[cutState.axis]) / 2 });
+  const len = f.bt.max[cutState.axis] - f.bt.min[cutState.axis];
+  cutState.at = Math.max(0, Math.min(len, cutState.at));
+  $<HTMLSelectElement>('cutAxis').value = String(cutState.axis);
+  Object.assign($<HTMLInputElement>('cutPos'), { max: String(len), value: String(cutState.at) });
+  Object.assign($<HTMLInputElement>('cutMm'), { max: String(len), value: cutState.at.toFixed(1) });
+  $('cutUnit').textContent = t(cutState.axis === 2 ? 'cut.fromBottom' : 'cut.fromStart', { len: Math.round(len) });
+  $<HTMLButtonElement>('cutApply').disabled = cutState.at < 1 || cutState.at > len - 1;
+
+  const plan = p.split;
+  $('splitBox').hidden = !plan;
+  const size = 1.3 * Math.max(...[0, 1, 2].map((k) => f.bt.max[k] - f.bt.min[k]));
+  if (plan) {
+    const pct = Math.round((100 * plan.at) / plan.length);
+    $('splitText').textContent = t(plan.valid ? 'split.where' : 'split.wherePartial', { len: Math.round(plan.length), at: Math.round(plan.at), pct });
+    $('splitPieces').replaceChildren(
+      ...plan.pieces.map((q, i) =>
+        li(
+          t('split.piece', {
+            i: i + 1,
+            how: t(q.onCut ? 'split.onCut' : 'split.flip'),
+            mode: t(`split.mode.${q.mode}`),
+            ok: q.valid ? t('split.ok') : t('split.over', { p: (q.overhang * 100).toFixed(1), n: q.islands }),
+          }),
+        ),
+      ),
+    );
+  }
+  if (!lastBuild) return;
+  if (cutState.touched || !plan) {
+    if (!cutState.touched) return;
+    const c = [0, 1, 2].map((k) => (k === cutState.axis ? f.bt.min[k] + cutState.at : (f.bt.min[k] + f.bt.max[k]) / 2)) as [number, number, number];
+    const n: [number, number, number] = [0, 0, 0];
+    n[cutState.axis] = 1;
+    viewer.setCutPlane(f.base(c), n, size);
+    return;
+  }
+  // Suggested cut (plane given in the frame of the file).
   const b0 = computeBounds(p.mesh);
   const c = [0, 1, 2].map((k) => (k === plan.axis ? plan.d : (b0.min[k] + b0.max[k]) / 2));
-  const bt = computeBounds(applyMatrix(p.mesh, M));
-  const q = mv(c);
-  const at: [number, number, number] = [
-    q[0] - (bt.min[0] + bt.max[0]) / 2 + r.offset[0],
-    q[1] - (bt.min[1] + bt.max[1]) / 2 + r.offset[1],
-    q[2] - bt.min[2] - print.baseCut + r.offset[2],
-  ];
-  viewer.setCutPlane(at, mv(plan.n), 1.3 * Math.max(...[0, 1, 2].map((k) => axisSize(p, k))));
+  viewer.setCutPlane(f.base(f.mv(c)), f.mv(plan.n), size);
 }
 
-async function applySplit() {
-  const p = cur();
-  const plan = p?.split;
-  if (!p || !plan) return;
+/** Cut part p with the plane n·x = d (frame of the file): two pieces, each turned as given. */
+async function cutPart(p: Part, n: [number, number, number], d: number, downs: [[number, number, number], [number, number, number]], mode?: 'spiral' | 'planar') {
   const idx = parts.indexOf(p);
-  const pieces = plan.pieces.map((q, i): Part => {
-    const mesh = splitPiece(p.mesh, plan.axis, plan.d, q.side);
-    const n: [number, number, number] = [0, 0, 0];
-    n[plan.axis] = q.side;
+  const sides: [number, number, number][] = [[-n[0], -n[1], -n[2]], n];
+  const pieces = sides.map((m, i): Part => {
+    const dd = i === 0 ? -d : d;
+    const mesh = cutPiece(p.mesh, m, dd);
     return {
       ...p,
       name: `${p.name} (${i + 1}/2)`,
       original: mesh,
       mesh,
       scale: 1,
-      source: { scale: p.source?.scale ?? p.scale, cuts: [...(p.source?.cuts ?? []), { n, d: q.side * plan.d }] },
+      source: { scale: p.source?.scale ?? p.scale, cuts: [...(p.source?.cuts ?? []), { n: m, d: dd }] },
       orientations: [],
       orientIdx: 0,
       manual: [...IDENTITY] as Mat3,
-      wantDown: q.down,
+      wantDown: downs[i],
       placed: i === 0, // the first piece keeps the place of the part, the second goes beside it
       split: null,
     };
-  });
+  }).filter((q) => q.mesh.indices.length > 0);
+  if (pieces.length < 2) return;
   parts.splice(idx, 1, ...pieces);
-  // The print mode suggested for both pieces.
-  const mode = plan.pieces[0].mode;
-  if (plan.pieces.every((q) => q.mode === mode) && print.mode !== mode) {
+  if (mode && print.mode !== mode) {
     print.mode = mode;
     save('gb.print', print);
     renderPrintFields();
@@ -353,6 +378,49 @@ async function applySplit() {
   selectPart(idx);
   fitNext = true;
   await analyze(pieces);
+}
+
+function applyManualCut() {
+  const p = cur();
+  if (!p?.orientations.length) return;
+  const f = placedFrame(p);
+  const a = cutState.axis;
+  // Plane in the frame of the file: (M x)[a] = c  ⇔  row a of M · x = c.
+  const n: [number, number, number] = [f.M[a * 3], f.M[a * 3 + 1], f.M[a * 3 + 2]];
+  const c = f.bt.min[a] + cutState.at;
+  // Both pieces stay turned as the part is now (a horizontal cut: the top piece sits on the cut).
+  const O = orientedMatrix(p);
+  const down: [number, number, number] = [-O[6], -O[7], -O[8]];
+  cutPart(p, n, c, [down, down]);
+}
+$('cutApply').onclick = applyManualCut;
+$<HTMLSelectElement>('cutAxis').addEventListener('change', (e) => {
+  const p = cur();
+  cutState.axis = +(e.target as HTMLSelectElement).value as 0 | 1 | 2;
+  cutState.touched = true;
+  if (p) {
+    const f = placedFrame(p);
+    cutState.at = (f.bt.max[cutState.axis] - f.bt.min[cutState.axis]) / 2;
+  }
+  renderSplit();
+});
+$<HTMLInputElement>('cutPos').addEventListener('input', (e) => {
+  Object.assign(cutState, { at: +(e.target as HTMLInputElement).value, touched: true });
+  renderSplit();
+});
+$<HTMLInputElement>('cutMm').addEventListener('change', (e) => {
+  const v = parseFloat((e.target as HTMLInputElement).value);
+  if (Number.isFinite(v)) Object.assign(cutState, { at: v, touched: true });
+  renderSplit();
+});
+
+async function applySplit() {
+  const p = cur();
+  const plan = p?.split;
+  if (!p || !plan) return;
+  const [lo, hi] = [plan.pieces.find((q) => q.side < 0)!, plan.pieces.find((q) => q.side > 0)!];
+  const mode = plan.pieces.every((q) => q.mode === plan.pieces[0].mode) ? plan.pieces[0].mode : undefined;
+  await cutPart(p, plan.n, plan.d, [lo.down, hi.down], mode);
 }
 $('splitApply').onclick = () => applySplit();
 
@@ -536,7 +604,7 @@ async function analyze(which: Part[] = parts) {
     const m = p.mesh;
     let res: { orientations: OrientationCandidate[]; split: SplitPlan | null };
     try {
-      res = await busy(t('busy.orient'), () => run<{ orientations: OrientationCandidate[]; split: SplitPlan | null }>('analyze', { type: 'analyze', mesh: m, print: { ...print } }));
+      res = await busy(t('busy.orient'), () => run<{ orientations: OrientationCandidate[]; split: SplitPlan | null }>('analyze', { type: 'analyze', mesh: m, print: { ...print }, downs: p.wantDown ? [p.wantDown] : [] }));
     } catch (e) {
       if (!(e instanceof Superseded) && parts.includes(p)) setNotes(p.notes, errText(e));
       return;

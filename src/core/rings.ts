@@ -411,6 +411,18 @@ export function buildRings(input: MeshData, s: PrintSettings, start: Vec2, spira
         const pts = simplify3(r.closed ? [...r.pts, r.pts[0]] : r.pts, s.tolerance);
         return { closed: r.closed, pts: r.closed ? pts.slice(0, -1) : pts };
       })
+      // Every closed ring runs the same way round (counter-clockwise seen from above): the
+      // chaining through the mesh gives either sense, and a reversal would print the ramp back
+      // over the ring just done.
+      .map((r) => {
+        if (!r.closed) return r;
+        let a2 = 0;
+        for (let i = 0; i < r.pts.length; i++) {
+          const [p, q] = [r.pts[i], r.pts[(i + 1) % r.pts.length]];
+          a2 += p[0] * q[1] - q[0] * p[1];
+        }
+        return a2 < 0 ? { closed: true, pts: [...r.pts].reverse() } : r;
+      })
       .filter((r) => r.pts.length >= 2);
     // Tiny loops beside the main ring of a level are bumps of the field, not real features: the
     // neighbouring rings cover them. A tiny loop alone is the top closing, and stays.

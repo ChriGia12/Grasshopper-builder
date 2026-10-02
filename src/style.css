@@ -229,7 +229,14 @@ button.active { background: var(--accent); color: var(--accent-ink); border-colo
 .parts .title { flex: 1; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .parts button { padding: 0 8px; line-height: 1.6; }
 .project-row { display: flex; gap: 8px; margin-top: 10px; }
-.split-box { margin-top: 12px; padding: 10px 12px; border: 1px solid var(--warn); background: var(--warn-soft); border-radius: 8px; font-size: 13px; }
+.cut-box { margin-top: 12px; padding: 10px 12px; border: 1px solid var(--border); border-radius: 8px; font-size: 13px; display: flex; flex-direction: column; gap: 6px; }
+.cut-box .hint { margin: 0; }
+.cut-row { display: flex; align-items: center; gap: 6px; }
+.cut-row select { flex: 1; font: inherit; font-size: 13px; color: var(--text); background: var(--bg); border: 1px solid var(--border); border-radius: 6px; padding: 4px 6px; }
+.cut-row input[type='range'] { flex: 1; }
+.cut-row input[type='number'] { width: 70px; font: inherit; font-size: 13px; color: var(--text); background: var(--bg); border: 1px solid var(--border); border-radius: 6px; padding: 4px 6px; }
+.cut-box > button { align-self: flex-start; }
+.split-box { margin-top: 2px; padding: 10px 12px; border: 1px solid var(--warn); background: var(--warn-soft); border-radius: 8px; font-size: 13px; }
 .split-box p { margin: 6px 0; }
 .split-box ul { margin: 0 0 8px; padding-left: 18px; }
 .scale-row { display: flex; align-items: center; gap: 5px; margin-top: 10px; flex-wrap: wrap; }

@@ -40,23 +40,28 @@ export interface SplitPlan {
 
 const FRACTIONS = [0.5, 0.4, 0.6, 0.3, 0.7, 0.25, 0.75];
 
-/**
- * The piece of `mesh` on one side of the plane x[axis] = value. A closed solid stays closed: the
- * cut section is filled with a flat face (holes kept); an open shell stays an open shell.
- */
+/** The piece of `mesh` on one side of the plane x[axis] = value (see cutPiece). */
 export function splitPiece(mesh: MeshData, axis: 0 | 1 | 2, value: number, side: 1 | -1): MeshData {
   const n: V3 = [0, 0, 0];
   n[axis] = side;
-  const piece = cutByPlane(mesh, n, side * value);
-  return isOpenMesh(mesh) ? piece : capCut(piece, axis, value, side);
+  return cutPiece(mesh, n, side * value);
 }
 
-/** Fills the boundary loops lying on the plane x[axis] = value with flat triangles facing −side. */
-function capCut(m: MeshData, axis: 0 | 1 | 2, value: number, side: 1 | -1): MeshData {
+/**
+ * The piece of `mesh` where n·x ≥ d (n unit). A closed solid stays closed: the cut section is
+ * filled with a flat face (holes kept); an open shell stays an open shell.
+ */
+export function cutPiece(mesh: MeshData, n: V3, d: number): MeshData {
+  const piece = cutByPlane(mesh, n, d);
+  return isOpenMesh(mesh) ? piece : capCut(piece, n, d);
+}
+
+/** Fills the boundary loops lying on the plane n·x = d with flat triangles facing −n. */
+function capCut(m: MeshData, n: V3, d: number): MeshData {
   const p = m.positions;
   const ix = m.indices;
   const nv = p.length / 3;
-  const on = (v: number) => Math.abs(p[v * 3 + axis] - value) < 1e-4;
+  const on = (v: number) => Math.abs(n[0] * p[v * 3] + n[1] * p[v * 3 + 1] + n[2] * p[v * 3 + 2] - d) < 2e-3;
   // Boundary edges (used once) on the plane, kept with their direction in the triangle.
   const count = new Map<number, number>();
   const dir = new Map<number, [number, number]>();
@@ -76,8 +81,6 @@ function capCut(m: MeshData, axis: 0 | 1 | 2, value: number, side: 1 | -1): Mesh
     const [u, v] = dir.get(key)!;
     if (on(u) && on(v)) next.set(v, u); // the cap runs the edge the other way round
   }
-  // Chain into loops, in the 2D coordinates of the plane.
-  const [a, b] = [0, 1, 2].filter((k) => k !== axis);
   const loops: number[][] = [];
   const used = new Set<number>();
   for (const start of next.keys()) {
@@ -92,7 +95,14 @@ function capCut(m: MeshData, axis: 0 | 1 | 2, value: number, side: 1 | -1): Mesh
     if (loop.length >= 3 && v === start) loops.push(loop);
   }
   if (!loops.length) return m;
-  const pt = (v: number) => new Vector2(p[v * 3 + a], p[v * 3 + b]);
+  // 2D coordinates on the plane: (e1, e2, n) right-handed.
+  const ref: V3 = Math.abs(n[0]) < 0.9 ? [1, 0, 0] : [0, 1, 0];
+  const e1 = norm(crossV(ref, n));
+  const e2 = crossV(n, e1);
+  const pt = (v: number) => {
+    const q: V3 = [p[v * 3], p[v * 3 + 1], p[v * 3 + 2]];
+    return new Vector2(dotV(q, e1), dotV(q, e2));
+  };
   const area = (l: number[]) => ShapeUtils.area(l.map(pt));
   const inside = (q: Vector2, l: number[]) => {
     let c = false;
@@ -104,26 +114,24 @@ function capCut(m: MeshData, axis: 0 | 1 | 2, value: number, side: 1 | -1): Mesh
   };
   const depth = loops.map((l) => loops.filter((o) => o !== l && inside(pt(l[0]), o)).length);
   const idx = Array.from(ix);
-  const want = -side; // outward normal of the cap along the axis
   loops.forEach((outer, k) => {
     if (depth[k] % 2) return;
     const holes = loops.filter((h, j) => depth[j] === depth[k] + 1 && inside(pt(h[0]), outer));
-    const ccw = (l: number[]) => (area(l) > 0 ? l : [...l].reverse());
-    const cw = (l: number[]) => (area(l) < 0 ? l : [...l].reverse());
-    const o = ccw(outer);
-    const hs = holes.map(cw);
+    const o = area(outer) > 0 ? outer : [...outer].reverse();
+    const hs = holes.map((h) => (area(h) < 0 ? h : [...h].reverse()));
     const all = [...o, ...hs.flat()];
-    for (const [i, j, l] of ShapeUtils.triangulateShape(o.map(pt), hs.map((h) => h.map(pt)))) {
-      const [u, v, w] = [all[i], all[j], all[l]];
-      // Normal along the axis of (u, v, w) in plane coordinates: sign of the 2D cross product,
-      // turned into the axis direction by the handedness of (a, b, axis).
-      const cross = (p[v * 3 + a] - p[u * 3 + a]) * (p[w * 3 + b] - p[u * 3 + b]) - (p[v * 3 + b] - p[u * 3 + b]) * (p[w * 3 + a] - p[u * 3 + a]);
-      const hand = axis === 1 ? -1 : 1; // (z, x, y) for the Y axis is (a=x, b=z): reversed
-      idx.push(...(Math.sign(cross) * hand === want ? [u, v, w] : [u, w, v]));
-    }
+    // Counter-clockwise in (e1, e2) faces +n: the cap must face −n, so the triangles are reversed.
+    for (const [i, j, l] of ShapeUtils.triangulateShape(o.map(pt), hs.map((h) => h.map(pt)))) idx.push(all[i], all[l], all[j]);
   });
   return { positions: p, indices: Uint32Array.from(idx) };
 }
+
+const dotV = (a: V3, b: V3) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+const crossV = (a: V3, b: V3): V3 => [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]];
+const norm = (a: V3): V3 => {
+  const l = Math.hypot(a[0], a[1], a[2]) || 1;
+  return [a[0] / l, a[1] / l, a[2] / l];
+};
 
 /** null when the part does not need to be cut (or cannot usefully be). */
 export function suggestSplit(

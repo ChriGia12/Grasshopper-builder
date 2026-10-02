@@ -188,7 +188,8 @@ function push(tp: Toolpath, p: PathPoint) {
 }
 
 function prepareLoop(c: Contour, s: PrintSettings, near: Vec2): Vec2[] {
-  const simple = simplifyClosed(c.pts, s.tolerance);
+  // Every loop is printed the same way round (counter-clockwise from above), holes included.
+  const simple = simplifyClosed(signedArea(c.pts) < 0 ? [...c.pts].reverse() : c.pts, s.tolerance);
   return densify(rotateToNearest(simple, near), s.maxSegment, true);
 }
 

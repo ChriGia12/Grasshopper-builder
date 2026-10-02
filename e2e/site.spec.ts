@@ -133,6 +133,22 @@ test('a part that cannot be printed whole: the site suggests the cut and applies
   await expect(page.locator('#modelInfo')).toContainText('watertight');
 });
 
+test('the cut section is always there: a manual horizontal cut gives two pieces', async ({ page }) => {
+  await addPart(page, 'blocco.stl', 80, 60, 40);
+  await expect(download(page)).toBeEnabled();
+  await expect(page.locator('#cutBox')).toBeVisible();
+  await expect(page.locator('#splitBox')).toBeHidden(); // a block needs no cut: no suggestion
+  await page.locator('#cutAxis').selectOption('2');
+  await page.locator('#cutMm').fill('15');
+  await page.locator('#cutMm').blur();
+  await page.locator('#cutApply').click();
+  await expect(page.locator('#partList li .title')).toHaveText(['1. blocco.stl (1/2)', '2. blocco.stl (2/2)']);
+  await expect(download(page)).toBeEnabled();
+  await expect(page.locator('#modelInfo')).toContainText('80.0 × 60.0 × 15.0 mm');
+  await page.locator('#partList li').nth(1).click();
+  await expect(page.locator('#modelInfo')).toContainText('80.0 × 60.0 × 25.0 mm');
+});
+
 test('a part drawn in metres is flagged and scaled ×1000', async ({ page }) => {
   await addPart(page, 'metri.stl', 0.08, 0.06, 0.02);
   await expect(page.locator('#modelNotes')).toContainText('probabilmente il file è in metri');

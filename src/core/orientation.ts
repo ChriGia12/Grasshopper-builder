@@ -134,8 +134,17 @@ export function evaluateOrientation(
   return { matrix: R, height, baseArea, overhangArea, totalArea, unsupported, maxIslands, singleLoop };
 }
 
-export function analyzeOrientations(mesh: MeshData, overhangDeg: number, layerHeight: number, thinWallMax = 0): OrientationCandidate[] {
+export function analyzeOrientations(
+  mesh: MeshData,
+  overhangDeg: number,
+  layerHeight: number,
+  thinWallMax = 0,
+  /** Directions that must be among the candidates (a piece kept as placed, or resting on its cut). */
+  extra: [number, number, number][] = [],
+): OrientationCandidate[] {
   const candidates = [...AXES];
+  for (const d of extra)
+    if (!candidates.some((c) => c.down[0] * d[0] + c.down[1] * d[1] + c.down[2] * d[2] > 0.999)) candidates.push({ label: msg('o.chosen'), down: d });
   hullFacets(mesh, 8).forEach((d, i) => {
     if (!candidates.some((c) => c.down[0] * d[0] + c.down[1] * d[1] + c.down[2] * d[2] > 0.995))
       candidates.push({ label: msg('o.face', { n: i + 1 }), down: d });

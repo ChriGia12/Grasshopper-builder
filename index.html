@@ -79,11 +79,27 @@
           </div>
           <div id="modelInfo" class="info" hidden></div>
           <ul id="modelNotes" class="notes"></ul>
-          <div id="splitBox" class="split-box" hidden>
-            <strong data-i18n="split.title">Da stampare in 2 pezzi</strong>
-            <p id="splitText"></p>
-            <ul id="splitPieces"></ul>
-            <button class="primary small" id="splitApply" data-i18n="split.apply">Dividi in 2 pezzi</button>
+          <div id="cutBox" class="cut-box" hidden>
+            <strong data-i18n="cut.title">Taglia il pezzo</strong>
+            <div id="splitBox" class="split-box" hidden>
+              <strong data-i18n="split.title">Da stampare in 2 pezzi</strong>
+              <p id="splitText"></p>
+              <ul id="splitPieces"></ul>
+              <button class="primary small" id="splitApply" data-i18n="split.apply">Dividi in 2 pezzi</button>
+            </div>
+            <p class="hint" data-i18n="cut.hint">Per stampare a parte le zone complicate: scegli il piano e la posizione, il taglio è mostrato in arancione nella vista.</p>
+            <div class="cut-row">
+              <select id="cutAxis" aria-label="Piano di taglio" data-i18n-aria="cut.axis">
+                <option value="2" data-i18n="cut.z">Orizzontale (Z)</option>
+                <option value="0" data-i18n="cut.x">Verticale, perpendicolare a X</option>
+                <option value="1" data-i18n="cut.y">Verticale, perpendicolare a Y</option>
+              </select>
+            </div>
+            <div class="cut-row">
+              <input type="range" id="cutPos" min="0" max="100" step="0.5" aria-label="Posizione del taglio" data-i18n-aria="cut.pos" />
+              <input type="number" id="cutMm" step="any" min="0" /> <span id="cutUnit">mm</span>
+            </div>
+            <button class="ghost small" id="cutApply" data-i18n="cut.apply">Taglia qui</button>
           </div>
         </section>
 
