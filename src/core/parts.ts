@@ -77,8 +77,9 @@ export function printPartsInTurn(mesh: MeshData, s: PrintSettings, boxes: PartBo
       out.partChanges!++;
     }
     const base = out.points.length;
-    out.points.push(...tp.points);
-    out.layerStart.push(...tp.layerStart.map((i) => i + base));
+    // One by one: spreading a long array into push() overflows the argument limit in Safari.
+    for (const q of tp.points) out.points.push(q);
+    for (const i of tp.layerStart) out.layerStart.push(i + base);
     out.layerCount += tp.layerCount;
     out.printLength += tp.printLength;
     out.travelLength += tp.travelLength;
@@ -116,7 +117,8 @@ export function joinInTurn(first: Toolpath, second: Toolpath, s: PrintSettings):
   if (!second.points.length) return first;
   const last = first.points[first.points.length - 1];
   const next = second.points[0];
-  const top = Math.max(...first.points.map((p) => p.z));
+  let top = -Infinity;
+  for (const p of first.points) top = Math.max(top, p.z);
   const zSafe = Math.max(top, next.z) + Math.max(s.travelLift, PART_CHANGE_CLEARANCE);
   const points: PathPoint[] = [...first.points, { x: last.x, y: last.y, z: zSafe, e: false }, { x: next.x, y: next.y, z: zSafe, e: false, ptp: true }, ...second.points];
   const base = first.points.length + 2;

@@ -341,7 +341,8 @@ export function buildPlanar(tp: Toolpath, layers: Layer[], s: PrintSettings, sta
       openOnes.forEach((o, k) => {
         const loop = o.pts.length > 3 && Math.hypot(o.pts[0][0] - o.pts[o.pts.length - 1][0], o.pts[0][1] - o.pts[o.pts.length - 1][1]) < 1e-6;
         const ends = loop ? o.pts : [o.pts[0], o.pts[o.pts.length - 1]];
-        const d = Math.min(...ends.map((q) => Math.hypot(q[0] - cur[0], q[1] - cur[1])));
+        let d = Infinity;
+        for (const q of ends) d = Math.min(d, Math.hypot(q[0] - cur[0], q[1] - cur[1]));
         if (d < bd) [bd, bi] = [d, k];
       });
       const c = openOnes.splice(bi, 1)[0];

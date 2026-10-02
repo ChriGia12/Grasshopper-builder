@@ -528,7 +528,8 @@ export function buildRings(input: MeshData, s: PrintSettings, start: Vec2, spira
     if (!r.closed || !nested) return rotateRing(r, near);
     // Continuity first: only points about as close as the nearest one (within one bead); among
     // them the one most in line with the seam direction, so the seam does not drift.
-    const dmin = Math.min(...r.pts.map((q) => dist(q, near)));
+    let dmin = Infinity;
+    for (const q of r.pts) dmin = Math.min(dmin, dist(q, near));
     let best = -1;
     r.pts.forEach((q, k) => {
       if (dist(q, near) > dmin + s.wallSpacing) return;

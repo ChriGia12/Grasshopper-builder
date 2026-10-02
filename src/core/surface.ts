@@ -116,8 +116,10 @@ export function topSurfacePasses(mesh: MeshData, o: SurfaceOptions, hf = new Hei
   ];
   const along = corners.map((c) => c[0] * dir[0] + c[1] * dir[1]);
   const across = corners.map((c) => c[0] * nrm[0] + c[1] * nrm[1]);
-  const [t0, t1] = [Math.min(...along), Math.max(...along)];
-  const [s0, s1] = [Math.min(...across), Math.max(...across)];
+  // Loops, not Math.min(...array): long arrays overflow the argument limit in Safari.
+  let [t0, t1, s0, s1] = [Infinity, -Infinity, Infinity, -Infinity];
+  for (const v of along) [t0, t1] = [Math.min(t0, v), Math.max(t1, v)];
+  for (const v of across) [s0, s1] = [Math.min(s0, v), Math.max(s1, v)];
   const step = Math.max(0.5, Math.min(2, o.spacing / 4));
   const minNz = Math.cos((o.maxSlope * Math.PI) / 180);
   const passes: SurfaceRun[] = [];
