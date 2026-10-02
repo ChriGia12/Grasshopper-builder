@@ -3,11 +3,13 @@
 import { describe, expect, it } from 'vitest';
 import { buildToolpath, sliceForPrint, type Toolpath } from '../src/core/toolpath';
 import { sliceAt } from '../src/core/slicer';
-import { applyMatrix, dropToOrigin, rotX, weld, type MeshData } from '../src/core/mesh';
+import { applyMatrix, dropToOrigin, mergeMeshes, rotX, weld, type MeshData } from '../src/core/mesh';
+import { runBuild } from '../src/core/pipeline';
+import { DEFAULT_ROBOT } from '../src/core/settings';
 import { polylineLength } from '../src/core/polyline';
 import { DEFAULT_PRINT, type PrintSettings } from '../src/core/settings';
 import { FaceGrid, pointTriangle } from '../src/core/tilt';
-import { lathe } from './fixtures';
+import { box, lathe } from './fixtures';
 
 /** An open bowl (dome without bottom) tilted: its rim touches the table at one point only. */
 function tiltedBowl(): MeshData {
@@ -74,7 +76,7 @@ describe('the mesh is printed whole and as it is', () => {
 });
 
 describe('supports', () => {
-  const s: PrintSettings = { ...DEFAULT_PRINT, mode: 'planar', supports: true };
+  const s: PrintSettings = { ...DEFAULT_PRINT, mode: 'planar', supports: "inline" };
 
   it('the rim that rises off the table gets a wall under it; the part is unchanged', () => {
     const bowl = tiltedBowl();
@@ -84,7 +86,7 @@ describe('supports', () => {
     expect(tp.warnings.map((w) => w.k)).toContain('w.supports');
     // the part itself is printed exactly as without supports
     expect(offMesh(tp, bowl, s)).toBeLessThan(s.layerHeight + 0.5); // on the ramp the bead is up to one layer below
-    const plain = buildToolpath(bowl, { ...s, supports: false });
+    const plain = buildToolpath(bowl, { ...s, supports: "none" });
     const partLen = (t: Toolpath) => t.points.reduce((a, p, i) => (i && p.e && !p.support ? a + Math.hypot(p.x - t.points[i - 1].x, p.y - t.points[i - 1].y) : a), 0);
     expect(partLen(tp)).toBeGreaterThan(0.9 * partLen(plain));
     // every support column stands on the table: the lowest layer has supports
@@ -95,5 +97,37 @@ describe('supports', () => {
   it('a part standing well on the table needs none', () => {
     const tp = buildToolpath(weld(lathe([[40, 0], [40, 30]])), s);
     expect(tp.points.some((p) => p.support)).toBe(false);
+  });
+});
+
+describe('supports in a separate program, sparse fill, base cut', () => {
+  const I = [1, 0, 0, 0, 1, 0, 0, 0, 1] as unknown as Parameters<typeof runBuild>[1];
+  // Mushroom: a 10 mm stem under a 60 × 60 cap — the cap underside is a wide overhang.
+  const mushroom = () => weld(mergeMeshes([box(10, 10, 20, 25, 25, 0), box(60, 60, 6, 0, 0, 20)]));
+
+  it('separate: the part program is exactly the one without supports, the supports have their own', () => {
+    const plain = runBuild(mushroom(), I, { ...DEFAULT_PRINT, mode: 'planar', supports: 'none' }, DEFAULT_ROBOT, 't');
+    const sep = runBuild(mushroom(), I, { ...DEFAULT_PRINT, mode: 'planar', supports: 'separate' }, DEFAULT_ROBOT, 't');
+    expect(sep.src).toBe(plain.src);
+    expect(sep.supportSrc).toBeDefined();
+    expect(sep.supportSrc!).toMatch(/^DEF Pezzo1_SUP \( \)/m);
+    expect((sep.supportSrc!.match(/^LIN \{/gm) ?? []).length).toBeGreaterThan(20);
+    // the checks run on supports first, then the part
+    expect(sep.toolpath.points.findIndex((p) => !p.support && p.e)).toBeGreaterThan(sep.toolpath.points.findIndex((p) => p.support));
+    expect(sep.toolpath.warnings.map((w) => w.k)).toContain('w.supportsSeparate');
+  });
+
+  it('a wide overhang gets a sparse fill inside the support, not only its outline', () => {
+    const tp = buildToolpath(mushroom(), { ...DEFAULT_PRINT, mode: 'planar', supports: 'inline' });
+    const supLen = tp.points.reduce((a, p, i) => (i && p.e && p.support ? a + Math.hypot(p.x - tp.points[i - 1].x, p.y - tp.points[i - 1].y) : a), 0);
+    const layers = new Set(tp.points.filter((p) => p.support).map((p) => p.z)).size;
+    // a 60 mm square outline is ~240 mm per layer: the fill adds clearly more
+    expect(supLen / layers).toBeGreaterThan(400);
+  });
+
+  it('base cut (own parts): the cut part is printed, and the result says the mesh is not whole', () => {
+    const r = runBuild(weld(box(40, 40, 30)), I, { ...DEFAULT_PRINT, mode: 'planar', baseCut: 10 }, DEFAULT_ROBOT, 't');
+    expect(r.toolpath.layerCount).toBeLessThan(15);
+    expect(r.toolpath.warnings.map((w) => w.k)).toContain('w.baseCut');
   });
 });

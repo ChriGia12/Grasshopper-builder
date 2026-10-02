@@ -36,6 +36,7 @@ const save = (key: string, v: unknown) => {
 
 const print: PrintSettings = load('gb.print', DEFAULT_PRINT);
 if ((print.mode as string) === 'auto') print.mode = 'planar'; // old saved setting
+if (typeof print.supports === 'boolean') print.supports = print.supports ? 'inline' : 'none'; // old on/off setting
 // The whole mesh is printed: an old saved minimum contour length (10 mm) no longer applies.
 try {
   if (localStorage.getItem('gb.meshWhole') !== '1') {
@@ -301,7 +302,7 @@ function placedFrame(p: Part) {
   const base = (q: [number, number, number]): [number, number, number] => [
     q[0] - (bt.min[0] + bt.max[0]) / 2 + xy[0],
     q[1] - (bt.min[1] + bt.max[1]) / 2 + xy[1],
-    q[2] - bt.min[2] + (r?.offset[2] ?? 0),
+    q[2] - bt.min[2] - print.baseCut + (r?.offset[2] ?? 0),
   ];
   return { M, bt, mv, base };
 }
@@ -890,7 +891,18 @@ const PRINT_FIELDS: Field[] = [
   { key: 'adaptiveLayers', label: 'f.adaptiveLayers', kind: 'check', full: true },
   { key: 'toolTilt', label: 'f.toolTilt', kind: 'check', full: true },
   { key: 'maxTilt', label: 'f.maxTilt', kind: 'number', step: 5, min: 0 },
-  { key: 'supports', label: 'f.supports', kind: 'check', full: true },
+  {
+    key: 'supports',
+    label: 'f.supports',
+    kind: 'select',
+    full: true,
+    options: [
+      ['none', 'sup.none'],
+      ['inline', 'sup.inline'],
+      ['separate', 'sup.separate'],
+    ],
+  },
+  { key: 'baseCut', label: 'f.baseCut', kind: 'number', step: 1, min: 0 },
   { key: 'walls', label: 'f.walls', kind: 'number', step: 1, min: 1 },
   { key: 'wallSpacing', label: 'f.wallSpacing', kind: 'number', step: 0.5, min: 0.1 },
   { key: 'tolerance', label: 'f.tolerance', kind: 'number', step: 0.05, min: 0 },
@@ -1115,6 +1127,7 @@ interface BuildMsg {
   sup: Uint8Array;
   meta: Toolpath;
   src: string;
+  supportSrc?: string;
   offset: [number, number, number];
   mesh: MeshData;
   min: [number, number, number];
@@ -1462,6 +1475,8 @@ function updateExport() {
   const ready = !!lastSrc && !!lastBuild && fieldErrors.size === 0;
   const blocks = exportBlocks();
   $<HTMLButtonElement>('download').disabled = !ready || blocks.length > 0;
+  $('downloadSup').hidden = !lastBuild?.supportSrc;
+  $<HTMLButtonElement>('downloadSup').disabled = !ready || blocks.length > 0;
   $<HTMLButtonElement>('reportBtn').disabled = !ready;
   $('offBedRow').hidden = !(ready && lastBuild!.offBed);
   $('supportRow').hidden = !(ready && lastBuild!.support);
@@ -1476,6 +1491,16 @@ function updateExport() {
 offBedOk.addEventListener('change', updateExport);
 supportOk.addEventListener('change', updateExport);
 tiltOk.addEventListener('change', updateExport);
+/** Supports in a separate program: the file to print before the part. */
+$('downloadSup').onclick = () => {
+  const text = lastBuild?.supportSrc;
+  if (!text || !lastSrc || exportBlocks().length) return;
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(new Blob([text], { type: 'text/plain' }));
+  a.download = sanitizeProgramName(robot.programName) + '_SUP.src';
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+};
 $('download').onclick = () => {
   if (!lastSrc || !lastBuild || exportBlocks().length) return;
   const a = document.createElement('a');

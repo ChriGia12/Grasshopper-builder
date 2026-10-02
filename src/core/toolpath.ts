@@ -90,7 +90,7 @@ export function sliceForPrint(mesh: MeshData, s: PrintSettings): LayerSummary {
     if (!l.contours.length) emptyLayers++;
   }
   // Supports are added after the counts above: they are not part of the mesh.
-  const supportLayers = s.supports ? addSupports(layers, s.layerHeight, s.wallSpacing, s.overhangAngle) : 0;
+  const supportLayers = s.supports !== 'none' ? addSupports(layers, s.layerHeight, s.wallSpacing, s.overhangAngle) : 0;
   const spiral = supportLayers ? null : spiralRange(layers);
   return { layers, singleLoop: spiral !== null, spiral, maxIslands, openLayers, emptyLayers, dropped, supportLayers };
 }

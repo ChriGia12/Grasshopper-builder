@@ -106,3 +106,29 @@ export function printPartsInTurn(mesh: MeshData, s: PrintSettings, boxes: PartBo
   }
   return out;
 }
+
+/**
+ * Two programs run one after the other (supports printed first, then the part): one path for the
+ * simulation and the checks, joined like a change of part (up, PTP above, down).
+ */
+export function joinInTurn(first: Toolpath, second: Toolpath, s: PrintSettings): Toolpath {
+  if (!first.points.length) return second;
+  if (!second.points.length) return first;
+  const last = first.points[first.points.length - 1];
+  const next = second.points[0];
+  const top = Math.max(...first.points.map((p) => p.z));
+  const zSafe = Math.max(top, next.z) + Math.max(s.travelLift, PART_CHANGE_CLEARANCE);
+  const points: PathPoint[] = [...first.points, { x: last.x, y: last.y, z: zSafe, e: false }, { x: next.x, y: next.y, z: zSafe, e: false, ptp: true }, ...second.points];
+  const base = first.points.length + 2;
+  return {
+    ...second,
+    points,
+    layerStart: [...first.layerStart, ...second.layerStart.map((i) => i + base)],
+    layerCount: first.layerCount + second.layerCount,
+    printLength: first.printLength + second.printLength,
+    travelLength: first.travelLength + second.travelLength + (zSafe - last.z) + Math.hypot(next.x - last.x, next.y - last.y) + (zSafe - next.z),
+    travels: first.travels + second.travels,
+    partChanges: (second.partChanges ?? 0) + 1,
+    warnings: [...second.warnings],
+  };
+}

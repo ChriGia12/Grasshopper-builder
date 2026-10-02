@@ -1,13 +1,13 @@
 // End-to-end build used by the worker: orient → slice → toolpath → KUKA .src.
 import { msg, SettingsError, type Msg } from '../i18n';
 import { validateSettings } from './validate';
-import { writeKukaSrc } from './kuka';
-import { applyMatrix, computeBounds, dropToOrigin, mulMat3, openEdgeLift, rotZ, type Mat3, type MeshData } from './mesh';
+import { sanitizeProgramName, writeKukaSrc } from './kuka';
+import { applyMatrix, computeBounds, cutBelow, dropToOrigin, mulMat3, openEdgeLift, rotZ, translate, type Mat3, type MeshData } from './mesh';
 import type { PrintSettings, RobotSettings } from './settings';
 import { reachReport, type ReachReport } from './robot';
-import { buildToolpath, sliceForPrint, type Toolpath } from './toolpath';
+import { buildPlanar, buildToolpath, sliceForPrint, spiralRange, type Toolpath } from './toolpath';
 import { riskZones, type Zones } from './zones';
-import { printPartsInTurn, type PartBox } from './parts';
+import { joinInTurn, printPartsInTurn, type PartBox } from './parts';
 import { tiltAlongWalls } from './tilt';
 import { evaluateOrientation, OVERHANG_LIMIT, supportOk } from './orientation';
 import { collisionReport, type Body, type CollisionReport } from './collision';
@@ -15,6 +15,8 @@ import { collisionReport, type Body, type CollisionReport } from './collision';
 export interface BuildResult {
   toolpath: Toolpath;
   src: string;
+  /** Supports in a separate program: its .src (print it before the part). */
+  supportSrc?: string;
   /** Translation from the local (centered, z=0) frame to the robot BASE frame. */
   offset: [number, number, number];
   /** Oriented mesh in local frame, for the viewer. */
@@ -62,18 +64,45 @@ export function runBuild(
   // must not start a computation that could take minutes or exhaust memory.
   const invalid = validateSettings(print, robot);
   if (invalid.length) throw new SettingsError(invalid);
-  const mesh = dropToOrigin(applyMatrix(original, mulMat3(rotZ(robot.rotationZ), matrix)));
+  let mesh = dropToOrigin(applyMatrix(original, mulMat3(rotZ(robot.rotationZ), matrix)));
+  // Base cut (own parts only, chosen on purpose): what is below the plane is not printed.
+  if (print.baseCut > 0) mesh = translate(cutBelow(mesh, print.baseCut), 0, 0, -print.baseCut);
   const offset = placementOffset(original, robot);
   const start: [number, number] | undefined =
     print.startMode === 'point' ? [print.startX - offset[0], print.startY - offset[1]] : undefined;
   const summary = print.mode === 'surface' ? undefined : sliceForPrint(mesh, print);
-  // Several parts: one after the other, each one whole (parts.ts).
-  const toolpath = partBoxes && partBoxes.length > 1 ? printPartsInTurn(mesh, print, partBoxes, offset, start) : buildToolpath(mesh, print, summary, start);
+  // Supports in a separate program: the part and the supports become two paths, printed one
+  // after the other (supports first). Not with several parts or rings following the surface.
+  const multi = !!partBoxes && partBoxes.length > 1;
+  const wantSeparate = print.supports === 'separate';
+  const separate = wantSeparate && !multi && !!summary && summary.supportLayers > 0 && !(print.adaptiveLayers && (print.mode === 'planar' || print.mode === 'spiral'));
+  let toolpath: Toolpath;
+  let partPath: Toolpath | null = null;
+  let supportPath: Toolpath | null = null;
+  if (separate && summary) {
+    const partLayers = summary.layers.map((l) => ({ ...l, contours: l.contours.filter((c) => !c.support) }));
+    const spiral = spiralRange(partLayers);
+    partPath = buildToolpath(mesh, print, { ...summary, layers: partLayers, supportLayers: 0, spiral, singleLoop: spiral !== null }, start);
+    supportPath = { points: [], mode: 'planar', layerCount: 0, layerHeight: print.layerHeight, layerStart: [], printLength: 0, travelLength: 0, travels: 0, warnings: [] };
+    const supLayers = summary.layers.map((l) => ({ z: l.z, contours: l.contours.filter((c) => c.support) })).filter((l) => l.contours.length);
+    buildPlanar(supportPath, supLayers, print, start ?? [0, 0]);
+    supportPath.layerCount = supLayers.length;
+    toolpath = joinInTurn(supportPath, partPath, print);
+    toolpath.warnings.push(msg('w.supportsSeparate', { n: supLayers.length, name: sanitizeProgramName(robot.programName) + '_SUP' }));
+  } else {
+    // Several parts: one after the other, each one whole (parts.ts).
+    toolpath = multi ? printPartsInTurn(mesh, print, partBoxes!, offset, start) : buildToolpath(mesh, print, summary, start);
+    if (wantSeparate && summary?.supportLayers) toolpath.warnings.push(msg('w.supportsInline'));
+  }
+  if (print.baseCut > 0) toolpath.warnings.push(msg('w.baseCut', { z: print.baseCut }));
   const zones = riskZones(mesh, summary?.layers ?? null, print);
   const placed: RobotSettings = { ...robot, originX: offset[0], originY: offset[1], originZ: offset[2] };
   // Tool leaning along the walls (every mode but the surface one, which has its own tilt).
   if (print.toolTilt && toolpath.mode !== 'surface') tiltAlongWalls(toolpath, mesh, print);
-  const src = writeKukaSrc(toolpath, placed, { sourceName, layerHeight: print.layerHeight });
+  const src = writeKukaSrc(partPath ?? toolpath, placed, { sourceName, layerHeight: print.layerHeight });
+  const supportSrc = supportPath?.points.length
+    ? writeKukaSrc(supportPath, { ...placed, programName: sanitizeProgramName(robot.programName) + '_SUP' }, { sourceName, layerHeight: print.layerHeight })
+    : undefined;
 
   const min: [number, number, number] = [Infinity, Infinity, Infinity];
   const max: [number, number, number] = [-Infinity, -Infinity, -Infinity];
@@ -105,7 +134,7 @@ export function runBuild(
   if (toolpath.tiltX) toolpath.warnings.push(msg('w.tiltX', { n: toolpath.tiltX }));
   // An open edge (hull rim, bowl lip) that touches the table only in part: say where to cut.
   const lift = openEdgeLift(mesh);
-  if (lift > 1 && !print.supports) toolpath.warnings.push(msg('w.openEdgeLift', { z: Math.ceil(lift) }));
+  if (lift > 1 && print.supports === 'none') toolpath.warnings.push(msg('w.openEdgeLift', { z: Math.ceil(lift) }));
   // Same hard checks as the orientation ranking, on the orientation actually printed. The
   // surface mode prints on top of an existing part: its overhangs are not printed here.
   let support: BuildResult['support'] = null;
@@ -126,5 +155,5 @@ export function runBuild(
       errors.push(msg('v.collision', { n: collision.count, lin: collision.first + 1, what: `c.${collision.what}`, body: collision.body }));
     for (const c of collision.ptp) errors.push(msg('v.ptpCollision', { move: `c.move.${c.move}`, what: `c.${c.what}`, body: c.body }));
   }
-  return { toolpath, src, offset, mesh, min, max, reach, errors, offBed, support, zones, collision };
+  return { toolpath, src, supportSrc, offset, mesh, min, max, reach, errors, offBed, support, zones, collision };
 }

@@ -9,11 +9,14 @@
 // holds (an open rim that is not flat, the lip of a cap, the top of a shell dome).
 import ClipperLib from 'clipper-lib';
 import type { Vec2 } from './polyline';
-import type { Contour, Layer } from './slicer';
+import { classify, type Contour, type Layer } from './slicer';
+import { scanFill, serpentine } from './zigzag';
 
 const SCALE = 1000;
 /** Columns closer than this many beads become one block. */
 const MERGE = 3;
+/** Sparse fill inside wide support areas: one line every this many beads. */
+const FILL = 3;
 type IntPath = { X: number; Y: number }[];
 const toInt = (pts: Vec2[]): IntPath => pts.map(([x, y]) => ({ X: Math.round(x * SCALE), Y: Math.round(y * SCALE) }));
 const fromInt = (p: IntPath): Vec2[] => p.map((q) => [q.X / SCALE, q.Y / SCALE]);
@@ -65,13 +68,16 @@ export function addSupports(layers: Layer[], h: number, w: number, overhangDeg: 
   for (let i = layers.length - 2; i >= 0; i--) {
     // What layer i+1 prints that does not rest on layer i: it hangs, and joins the column.
     const hangs = bool(ClipperLib.ClipType.ctDifference, cover[i + 1], offset(cover[i], allow));
-    if (area(hangs) > w * w * 0.25) column = ClipperLib.Clipper.CleanPolygons(bool(ClipperLib.ClipType.ctUnion, column, hangs), 0.05 * SCALE);
+    const newHangs = area(hangs) > w * w * 0.25 ? hangs : [];
+    if (newHangs.length) column = ClipperLib.Clipper.CleanPolygons(bool(ClipperLib.ClipType.ctUnion, column, newHangs), 0.05 * SCALE);
     if (!column.length) continue;
     // In layer i the column is held up where the part is not. Columns closer than a few beads
     // are merged into one block (closing: grow, then shrink back): fewer, sturdier outlines and a
     // continuous bead instead of a jump to every strip.
     const merged = offset(offset(column, MERGE * w), -MERGE * w);
-    const hold = bool(ClipperLib.ClipType.ctDifference, merged, cover[i]);
+    // Separation layer: right under what starts hanging at i+1 nothing is printed, so the support
+    // ends one layer below the part and comes off cleanly.
+    const hold = bool(ClipperLib.ClipType.ctDifference, bool(ClipperLib.ClipType.ctDifference, merged, cover[i]), newHangs);
     const loops = hold.map(fromInt).filter((pts) => {
       let len = 0;
       for (let k = 0; k < pts.length; k++) len += Math.hypot(pts[(k + 1) % pts.length][0] - pts[k][0], pts[(k + 1) % pts.length][1] - pts[k][1]);
@@ -80,6 +86,22 @@ export function addSupports(layers: Layer[], h: number, w: number, overhangDeg: 
     if (!loops.length) continue;
     count++;
     layers[i].contours.push(...loops.map((pts): Contour => ({ pts: [...pts, pts[0]], closed: false, depth: 0, support: true })));
+    // Wide areas: a sparse zig-zag inside, one continuous line per area (turns run inside it).
+    const region = classify(loops.map((pts) => ({ pts, closed: true, depth: 0 })));
+    const passes = scanFill(region, FILL * w, i % 2 ? 90 : 0, w);
+    if (passes.length < 2) continue;
+    let line: Vec2[] = [];
+    const flush = () => {
+      if (line.length >= 2) layers[i].contours.push({ pts: line, closed: false, depth: 0, support: true });
+      line = [];
+    };
+    for (const [ps, flip, adjacent] of serpentine(passes, passes[0].a, (q, e) => q[e])) {
+      const [a, b] = flip ? [ps.b, ps.a] : [ps.a, ps.b];
+      const last = line[line.length - 1];
+      if (!adjacent || !last || Math.hypot(a[0] - last[0], a[1] - last[1]) > 2 * FILL * w) flush();
+      line.push(a, b);
+    }
+    flush();
   }
   return count;
 }

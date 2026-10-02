@@ -16,8 +16,13 @@ export interface PrintSettings {
    * the previous ring (layerHeight in Z on steep walls, wallSpacing sideways on flat areas).
    */
   adaptiveLayers: boolean;
-  /** Removable support walls under what hangs in the air (the mesh is never changed). */
-  supports: boolean;
+  /**
+   * Removable supports under what hangs in the air (the mesh is never changed): none, printed in
+   * the same program layer by layer, or in a separate program printed before the part.
+   */
+  supports: 'none' | 'inline' | 'separate';
+  /** mm: own parts only — the part is cut this high above its lowest point and rests on the cut (removes material). */
+  baseCut: number;
   firstLayerZ: number; // mm, nozzle height of the first layer above the table (Tavolino1: 0.5)
   walls: number; // number of concentric perimeters
   wallSpacing: number; // mm, bead width / distance between perimeters
@@ -98,7 +103,8 @@ export const DEFAULT_PRINT: PrintSettings = {
   layerHeight: 1.5,
   layerRamp: 20,
   adaptiveLayers: false,
-  supports: false,
+  supports: 'none',
+  baseCut: 0,
   firstLayerZ: 0.5,
   walls: 1,
   wallSpacing: 6,
