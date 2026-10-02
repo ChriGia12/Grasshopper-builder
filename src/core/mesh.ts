@@ -115,10 +115,10 @@ export function scale(m: MeshData, s: number): MeshData {
 }
 
 /**
- * Everything below z = zCut is cut away: triangles crossing the plane are clipped, and the new
+ * Keeps the side of the plane n·p ≥ d: triangles crossing the plane are clipped, and the new
  * vertices on the plane are shared between neighbours, so the cut edge stays one clean loop.
  */
-export function cutBelow(m: MeshData, zCut: number): MeshData {
+export function cutByPlane(m: MeshData, n: [number, number, number], d: number): MeshData {
   const p = m.positions;
   const ix = m.indices;
   const nv = p.length / 3;
@@ -126,7 +126,11 @@ export function cutBelow(m: MeshData, zCut: number): MeshData {
   const idx: number[] = [];
   const kept = new Map<number, number>();
   const onPlane = new Map<number, number>();
-  const above = (v: number) => p[v * 3 + 2] >= zCut;
+  // Vertices within 1 µm of the plane count as on it: no sliver triangles, no doubled points.
+  const side = (v: number) => {
+    const sd = n[0] * p[v * 3] + n[1] * p[v * 3 + 1] + n[2] * p[v * 3 + 2] - d;
+    return Math.abs(sd) < 1e-3 ? 0 : sd;
+  };
   const vert = (v: number) => {
     let k = kept.get(v);
     if (k === undefined) {
@@ -137,34 +141,62 @@ export function cutBelow(m: MeshData, zCut: number): MeshData {
     return k;
   };
   const cross = (u: number, v: number) => {
+    if (side(u) === 0) return vert(u);
+    if (side(v) === 0) return vert(v);
     const key = u < v ? u * nv + v : v * nv + u;
     let k = onPlane.get(key);
     if (k === undefined) {
-      const t = (zCut - p[u * 3 + 2]) / (p[v * 3 + 2] - p[u * 3 + 2]);
+      const t = side(u) / (side(u) - side(v));
       k = pos.length / 3;
       onPlane.set(key, k);
-      pos.push(p[u * 3] + t * (p[v * 3] - p[u * 3]), p[u * 3 + 1] + t * (p[v * 3 + 1] - p[u * 3 + 1]), zCut);
+      pos.push(p[u * 3] + t * (p[v * 3] - p[u * 3]), p[u * 3 + 1] + t * (p[v * 3 + 1] - p[u * 3 + 1]), p[u * 3 + 2] + t * (p[v * 3 + 2] - p[u * 3 + 2]));
     }
     return k;
   };
   for (let t = 0; t < ix.length; t += 3) {
     const tri = [ix[t], ix[t + 1], ix[t + 2]];
-    const up = tri.map(above);
-    if (up.every((x) => !x)) continue;
+    const sides = tri.map(side);
+    // Nothing strictly on the kept side (below, or only touching the plane): not kept.
+    if (Math.max(...sides) <= 0) continue;
+    const up = sides.map((x) => x >= 0);
     if (up.every((x) => x)) {
       idx.push(...tri.map(vert));
       continue;
     }
-    // Clip the triangle to the half-space above the plane (keeps the winding), then fan it.
+    // Clip the triangle to the kept half-space (keeps the winding), then fan it.
     const poly: number[] = [];
     for (let k = 0; k < 3; k++) {
       const [a, b] = [tri[k], tri[(k + 1) % 3]];
       if (up[k]) poly.push(vert(a));
       if (up[k] !== up[(k + 1) % 3]) poly.push(cross(a, b));
     }
-    for (let k = 1; k + 1 < poly.length; k++) idx.push(poly[0], poly[k], poly[k + 1]);
+    const ring = poly.filter((v, k) => v !== poly[(k + poly.length - 1) % poly.length]);
+    for (let k = 1; k + 1 < ring.length; k++) idx.push(ring[0], ring[k], ring[k + 1]);
   }
   return { positions: Float32Array.from(pos), indices: Uint32Array.from(idx) };
+}
+
+/** Everything below z = zCut is cut away (see cutByPlane). */
+export function cutBelow(m: MeshData, zCut: number): MeshData {
+  return cutByPlane(m, [0, 0, 1], zCut);
+}
+
+/** True when the mesh has boundary edges: an open shell (a hull, a sheet), not a closed solid. */
+export function isOpenMesh(m: MeshData): boolean {
+  const ix = m.indices;
+  const nv = m.positions.length / 3;
+  const count = new Map<number, number>();
+  for (let t = 0; t < ix.length; t += 3)
+    for (const [u, v] of [
+      [ix[t], ix[t + 1]],
+      [ix[t + 1], ix[t + 2]],
+      [ix[t + 2], ix[t]],
+    ]) {
+      const key = u < v ? u * nv + v : v * nv + u;
+      count.set(key, (count.get(key) ?? 0) + 1);
+    }
+  for (const c of count.values()) if (c === 1) return true;
+  return false;
 }
 
 /**

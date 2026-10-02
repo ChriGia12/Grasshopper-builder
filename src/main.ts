@@ -1,7 +1,7 @@
 import './style.css';
 import { ACCEPTED, combineParts, loadModel, pickPieces, type CellRegion } from './core/loaders';
 import { sanitizeProgramName } from './core/kuka';
-import { IDENTITY, applyMatrix, computeBounds, dropToOrigin, mergeMeshes, meshStats, mulMat3, rotX, rotY, rotZ, scale, translate, type Mat3, type MeshData } from './core/mesh';
+import { IDENTITY, applyMatrix, computeBounds, cutByPlane, dropToOrigin, mergeMeshes, meshStats, mulMat3, rotX, rotY, rotZ, scale, translate, type Mat3, type MeshData } from './core/mesh';
 import type { OrientationCandidate } from './core/orientation';
 import { placementOffset } from './core/pipeline';
 import { FIXED_ROBOT, validateSettings } from './core/validate';
@@ -11,6 +11,7 @@ import type { Toolpath } from './core/toolpath';
 import { cellBodies, type Body, type CollisionReport } from './core/collision';
 import type { Zones } from './core/zones';
 import type { PartBox } from './core/parts';
+import { splitPiece, type SplitPlan } from './core/split';
 import { Viewer } from './viewer';
 import { applyStatic, getLang, locale, msg, MsgError, setLang, t, tm, type Msg } from './i18n';
 import type { WorkerRequest } from './worker';
@@ -72,6 +73,10 @@ interface Part {
   placed: boolean;
   /** From a saved project: orientation to pick again once the analysis is done. */
   wantDown?: [number, number, number];
+  /** Not printable whole without supports: where to cut it in two (from the analysis). */
+  split?: SplitPlan | null;
+  /** A piece of a cut part: the file scale and the cuts that made it (scale is then locked). */
+  source?: { scale: number; cuts: { n: [number, number, number]; d: number }[] };
 }
 let parts: Part[] = [];
 let active = -1;
@@ -262,7 +267,94 @@ function selectPart(i: number) {
     setNotes([...p.notes, ...scaleHints(p)]);
   }
   renderScale();
+  renderSplit();
 }
+
+// ---------- cut in two pieces ----------
+// When a part cannot be printed whole without supports in any orientation, the analysis looks for
+// a cut that gives two pieces that can; the plane is shown in the view and one click applies it:
+// two parts, each already turned the way it prints best, printed one after the other.
+
+const axisSize = (p: Part, axis: number) => {
+  const b = computeBounds(p.mesh);
+  return b.max[axis] - b.min[axis];
+};
+
+function renderSplit() {
+  const p = cur();
+  const plan = p?.split;
+  $('splitBox').hidden = !plan;
+  viewer.setCutPlane(null);
+  if (!p || !plan) return;
+  const pct = Math.round((100 * plan.at) / plan.length);
+  const lines = plan.pieces.map((q, i) =>
+    t('split.piece', {
+      i: i + 1,
+      how: t(q.onCut ? 'split.onCut' : 'split.flip'),
+      mode: t(`split.mode.${q.mode}`),
+      ok: q.valid ? t('split.ok') : t('split.over', { p: (q.overhang * 100).toFixed(1), n: q.islands }),
+    }),
+  );
+  $('splitText').textContent = t(plan.valid ? 'split.where' : 'split.wherePartial', {
+    len: Math.round(plan.length),
+    at: Math.round(plan.at),
+    pct,
+  });
+  $('splitPieces').replaceChildren(...lines.map((l) => li(l)));
+  // The plane in the view (one part on the plate: the view shows exactly that part).
+  const r = lastBuild;
+  if (parts.length !== 1 || !r || !p.orientations.length) return;
+  const M = mulMat3(rotZ(p.rotZ), orientedMatrix(p));
+  const mv = (v: number[]) => [0, 1, 2].map((k) => M[k * 3] * v[0] + M[k * 3 + 1] * v[1] + M[k * 3 + 2] * v[2]) as [number, number, number];
+  const b0 = computeBounds(p.mesh);
+  const c = [0, 1, 2].map((k) => (k === plan.axis ? plan.d : (b0.min[k] + b0.max[k]) / 2));
+  const bt = computeBounds(applyMatrix(p.mesh, M));
+  const q = mv(c);
+  const at: [number, number, number] = [
+    q[0] - (bt.min[0] + bt.max[0]) / 2 + r.offset[0],
+    q[1] - (bt.min[1] + bt.max[1]) / 2 + r.offset[1],
+    q[2] - bt.min[2] - print.baseCut + r.offset[2],
+  ];
+  viewer.setCutPlane(at, mv(plan.n), 1.3 * Math.max(...[0, 1, 2].map((k) => axisSize(p, k))));
+}
+
+async function applySplit() {
+  const p = cur();
+  const plan = p?.split;
+  if (!p || !plan) return;
+  const idx = parts.indexOf(p);
+  const pieces = plan.pieces.map((q, i): Part => {
+    const mesh = splitPiece(p.mesh, plan.axis, plan.d, q.side);
+    const n: [number, number, number] = [0, 0, 0];
+    n[plan.axis] = q.side;
+    return {
+      ...p,
+      name: `${p.name} (${i + 1}/2)`,
+      original: mesh,
+      mesh,
+      scale: 1,
+      source: { scale: p.source?.scale ?? p.scale, cuts: [...(p.source?.cuts ?? []), { n, d: q.side * plan.d }] },
+      orientations: [],
+      orientIdx: 0,
+      manual: [...IDENTITY] as Mat3,
+      wantDown: q.down,
+      placed: i === 0, // the first piece keeps the place of the part, the second goes beside it
+      split: null,
+    };
+  });
+  parts.splice(idx, 1, ...pieces);
+  // The print mode suggested for both pieces.
+  const mode = plan.pieces[0].mode;
+  if (plan.pieces.every((q) => q.mode === mode) && print.mode !== mode) {
+    print.mode = mode;
+    save('gb.print', print);
+    renderPrintFields();
+  }
+  selectPart(idx);
+  fitNext = true;
+  await analyze(pieces);
+}
+$('splitApply').onclick = () => applySplit();
 
 // ---------- scale of the selected part ----------
 // Drawings sent in metres (1:1000), centimetres or inches arrive far too small: the scale
@@ -281,8 +373,13 @@ function renderScale() {
   $('scaleRow').hidden = !p;
   if (!p) return;
   const input = $<HTMLInputElement>('scaleInput');
-  input.value = String(p.scale);
+  input.value = String(p.source?.scale ?? p.scale);
   input.classList.remove('invalid');
+  // A piece of a cut part keeps the scale of the part it comes from.
+  const locked = !!p.source;
+  input.disabled = locked;
+  document.querySelectorAll<HTMLButtonElement>('[data-scale]').forEach((b) => (b.disabled = locked));
+  $('scaleRow').title = locked ? t('scale.locked') : '';
 }
 
 async function setScale(p: Part, s: number) {
@@ -329,6 +426,7 @@ function clearParts() {
   setNotes([]);
   renderParts();
   renderScale();
+  renderSplit();
   viewer.setModel(null, [0, 0, 0]);
   viewer.setToolpath(null, null, [], [0, 0, 0]);
   viewer.setZones(null, null, [0, 0, 0]);
@@ -436,15 +534,16 @@ async function analyze(which: Part[] = parts) {
   for (const p of which) {
     if (!parts.includes(p)) continue;
     const m = p.mesh;
-    let res: { orientations: OrientationCandidate[] };
+    let res: { orientations: OrientationCandidate[]; split: SplitPlan | null };
     try {
-      res = await busy(t('busy.orient'), () => run<{ orientations: OrientationCandidate[] }>('analyze', { type: 'analyze', mesh: m, print: { ...print } }));
+      res = await busy(t('busy.orient'), () => run<{ orientations: OrientationCandidate[]; split: SplitPlan | null }>('analyze', { type: 'analyze', mesh: m, print: { ...print } }));
     } catch (e) {
       if (!(e instanceof Superseded) && parts.includes(p)) setNotes(p.notes, errText(e));
       return;
     }
     if (!parts.includes(p)) continue;
     p.orientations = res.orientations;
+    p.split = res.split;
     // A saved project brings its orientation back (with its manual turns); otherwise the best one.
     const want = p.wantDown;
     const k = want ? res.orientations.findIndex((o) => o.down[0] * want[0] + o.down[1] * want[1] + o.down[2] * want[2] > 0.999) : -1;
@@ -513,7 +612,18 @@ interface ProjectFile {
   version: 1;
   print: PrintSettings;
   robot: Partial<RobotSettings>;
-  parts: { name: string; data: string; down: [number, number, number] | null; manual: Mat3; x: number; y: number; rotZ: number; scale?: number }[];
+  parts: {
+    name: string;
+    data: string;
+    down: [number, number, number] | null;
+    manual: Mat3;
+    x: number;
+    y: number;
+    rotZ: number;
+    scale?: number;
+    /** Pieces of a cut part: the cuts applied after scaling. */
+    cuts?: { n: [number, number, number]; d: number }[];
+  }[];
 }
 
 const toBase64 = (b: ArrayBuffer) => {
@@ -540,7 +650,8 @@ function saveProject() {
       x: p.x,
       y: p.y,
       rotZ: p.rotZ,
-      scale: p.scale,
+      scale: p.source?.scale ?? p.scale,
+      cuts: p.source?.cuts,
     })),
   };
   const a = document.createElement('a');
@@ -573,6 +684,10 @@ async function openProject(f: File) {
       const p = await readPart(sp.name, fromBase64(sp.data));
       Object.assign(p, { manual: sp.manual, x: sp.x, y: sp.y, rotZ: sp.rotZ, placed: true, wantDown: sp.down ?? undefined });
       if (sp.scale && sp.scale > 0 && sp.scale !== 1) Object.assign(p, { scale: sp.scale, mesh: scale(p.original, sp.scale) });
+      if (sp.cuts?.length) {
+        const m = sp.cuts.reduce((acc, c) => cutByPlane(acc, c.n, c.d), p.mesh);
+        Object.assign(p, { original: m, mesh: m, scale: 1, source: { scale: sp.scale ?? 1, cuts: sp.cuts } });
+      }
       loaded.push(p);
     }
   } catch (e) {
@@ -627,6 +742,8 @@ const PRINT_FIELDS: Field[] = [
   { key: 'layerHeight', label: 'f.layerHeight', kind: 'number', step: 0.1, min: 0.1 },
   { key: 'layerRamp', label: 'f.layerRamp', kind: 'number', step: 5, min: 0 },
   { key: 'adaptiveLayers', label: 'f.adaptiveLayers', kind: 'check', full: true },
+  { key: 'toolTilt', label: 'f.toolTilt', kind: 'check', full: true },
+  { key: 'maxTilt', label: 'f.maxTilt', kind: 'number', step: 5, min: 0 },
   { key: 'baseCut', label: 'f.baseCut', kind: 'number', step: 1, min: 0 },
   { key: 'walls', label: 'f.walls', kind: 'number', step: 1, min: 1 },
   { key: 'wallSpacing', label: 'f.wallSpacing', kind: 'number', step: 0.5, min: 0.1 },
@@ -942,6 +1059,7 @@ async function build(): Promise<BuildMsg | null> {
   fitNext = false;
   resetSim(r);
   renderStats(r);
+  renderSplit(); // the cut plane follows the part as it is now placed
   if (!$('srcPreview').hidden) showPreview();
   return r;
 }
@@ -1191,7 +1309,7 @@ function exportBlocks(): string[] {
 }
 
 /** Tilt on, but some points have a slope along X that C cannot follow. */
-const tiltNeedsConfirm = () => !!lastBuild && print.surfaceTilt && (lastBuild.meta.tiltX ?? 0) > 0;
+const tiltNeedsConfirm = () => !!lastBuild && (print.surfaceTilt || print.toolTilt) && (lastBuild.meta.tiltX ?? 0) > 0;
 
 function updateExport() {
   const ready = !!lastSrc && !!lastBuild && fieldErrors.size === 0;
@@ -1326,6 +1444,7 @@ function applyLanguage() {
   if (p) showModelInfo(p);
   setNotes(p ? [...p.notes, ...scaleHints(p)] : [], pieceError);
   renderScale();
+  renderSplit();
   if (lastBuild) {
     renderStats(lastBuild);
     setSimIndex(simIndex, true);

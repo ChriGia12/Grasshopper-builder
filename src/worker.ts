@@ -1,5 +1,6 @@
 // Heavy geometry runs here so the page stays responsive on million-triangle models.
 import { analyzeOrientations } from './core/orientation';
+import { suggestSplit } from './core/split';
 import { runBuild } from './core/pipeline';
 import { MsgError, SettingsError } from './i18n';
 import type { Mat3, MeshData } from './core/mesh';
@@ -19,7 +20,10 @@ self.onmessage = (ev: MessageEvent<WorkerRequest>) => {
       self.postMessage({ type: 'pong', id: req.id });
     } else if (req.type === 'analyze') {
       const orientations = analyzeOrientations(req.mesh, req.print.overhangAngle, req.print.layerHeight, req.print.thinWallMax);
-      self.postMessage({ type: 'analyze', id: req.id, orientations });
+      // Not printable whole without supports in any orientation: where to cut it in two.
+      const o = orientations[0];
+      const split = o && !o.valid ? suggestSplit(req.mesh, req.print, { overhang: o.overhangRatio, islands: o.unsupportedIslands }) : null;
+      self.postMessage({ type: 'analyze', id: req.id, orientations, split });
     } else {
       const r = runBuild(req.mesh, req.matrix, req.print, req.robot, req.sourceName, req.bodies, req.partBoxes);
       // Flatten the path into typed arrays for a cheap transfer to the viewer.

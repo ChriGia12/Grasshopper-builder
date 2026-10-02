@@ -38,6 +38,9 @@ export interface PrintSettings {
   surfacePasses: number; // surface: how many layers stacked on the top surface
   surfaceMaxSlope: number; // surface: faces steeper than this (deg) are walls, not top
   surfaceTilt: boolean; // surface: tilt the tool with C following the surface normal
+  /** Every other mode: the tool leans along the wall being printed, up to maxTilt degrees. */
+  toolTilt: boolean;
+  maxTilt: number;
   startMode: 'auto' | 'point';
   startX: number;
   startY: number;
@@ -115,6 +118,8 @@ export const DEFAULT_PRINT: PrintSettings = {
   surfacePasses: 1,
   surfaceMaxSlope: 75,
   surfaceTilt: false,
+  toolTilt: false,
+  maxTilt: 30,
   startMode: 'auto',
   startX: 0,
   startY: 0,

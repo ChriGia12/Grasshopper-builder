@@ -4,7 +4,7 @@
 import { msg, type Msg } from '../i18n';
 import { ConvexHull } from 'three/examples/jsm/math/ConvexHull.js';
 import { Vector3 } from 'three';
-import { applyMatrix, computeBounds, dropToOrigin, rotationBetween, type Mat3, type MeshData } from './mesh';
+import { applyMatrix, computeBounds, isOpenMesh, dropToOrigin, rotationBetween, type Mat3, type MeshData } from './mesh';
 import { pointInPolygon } from './polyline';
 import { sliceAt } from './slicer';
 import { collapseThinWalls } from './walls';
@@ -81,6 +81,9 @@ export function evaluateOrientation(
   const b = computeBounds(m);
   const height = b.max[2] - b.min[2];
   const limit = -Math.sin((overhangDeg * Math.PI) / 180);
+  // A thin open shell is one bead thick: flatter than the limit it overhangs on either side, not
+  // only where its normal points down (on a closed solid an upward face is a top, not an overhang).
+  const shell = isOpenMesh(m);
   let baseArea = 0;
   let overhangArea = 0;
   let totalArea = 0;
@@ -101,7 +104,7 @@ export function evaluateOrientation(
     const zTop = Math.max(p[a + 2], p[c1 + 2], p[c2 + 2]);
     if (zTop <= b.min[2] + layerHeight) {
       if (cosZ < -0.98) baseArea += area;
-    } else if (cosZ < limit) overhangArea += area;
+    } else if (shell ? Math.abs(cosZ) > -limit : cosZ < limit) overhangArea += area;
   }
 
   // Coarse slice to find floating islands and multi-contour layers.

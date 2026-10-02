@@ -1,7 +1,7 @@
 // Risk zones shown on the part before printing: faces overhanging beyond the critical angle,
 // islands that start in mid-air and walls thinner than one bead (they would not be printed).
 import type { MeshData } from './mesh';
-import { computeBounds } from './mesh';
+import { computeBounds, isOpenMesh } from './mesh';
 import { pointInPolygon, signedArea } from './polyline';
 import type { PrintSettings } from './settings';
 import type { Contour, Layer } from './slicer';
@@ -46,6 +46,7 @@ export function riskZones(mesh: MeshData, layers: Layer[] | null, s: PrintSettin
   const ix = mesh.indices;
   const minZ = computeBounds(mesh).min[2];
   const limit = -Math.sin((s.overhangAngle * Math.PI) / 180);
+  const shell = isOpenMesh(mesh); // one bead thick: flatter than the limit overhangs on both sides
   const over: number[] = [];
   for (let t = 0; t < ix.length; t += 3) {
     const a = ix[t] * 3;
@@ -59,7 +60,7 @@ export function riskZones(mesh: MeshData, layers: Layer[] | null, s: PrintSettin
     const len = Math.hypot(nx, ny, nz);
     if (!len) continue;
     if (Math.max(p[a + 2], p[b + 2], p[c + 2]) <= minZ + s.layerHeight) continue;
-    if (nz / len < limit) over.push(t / 3);
+    if (shell ? Math.abs(nz / len) > -limit : nz / len < limit) over.push(t / 3);
   }
 
   const islands: number[] = [];

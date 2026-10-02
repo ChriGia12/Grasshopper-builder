@@ -79,3 +79,30 @@ export function tube(rOut: number, rIn: number, h: number, seg = 96): MeshData {
   }
   return { positions: new Float32Array(pos), indices: new Uint32Array(idx) };
 }
+
+/** Closed solid of revolution about Z: profile = [radius, z] from bottom to top, flat caps. */
+export function lathe(profile: [number, number][], seg = 48): MeshData {
+  const pos: number[] = [];
+  const idx: number[] = [];
+  for (const [r, z] of profile)
+    for (let j = 0; j < seg; j++) {
+      const a = (j / seg) * Math.PI * 2;
+      pos.push(r * Math.cos(a), r * Math.sin(a), z);
+    }
+  const bottom = pos.length / 3;
+  pos.push(0, 0, profile[0][1]);
+  const top = pos.length / 3;
+  pos.push(0, 0, profile[profile.length - 1][1]);
+  for (let i = 0; i + 1 < profile.length; i++)
+    for (let j = 0; j < seg; j++) {
+      const a = i * seg + j;
+      const b = i * seg + ((j + 1) % seg);
+      idx.push(a, b, b + seg, a, b + seg, a + seg);
+    }
+  const last = (profile.length - 1) * seg;
+  for (let j = 0; j < seg; j++) {
+    idx.push(bottom, (j + 1) % seg, j);
+    idx.push(top, last + j, last + ((j + 1) % seg));
+  }
+  return { positions: new Float32Array(pos), indices: new Uint32Array(idx) };
+}

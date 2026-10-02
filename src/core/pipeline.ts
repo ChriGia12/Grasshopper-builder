@@ -8,6 +8,7 @@ import { reachReport, type ReachReport } from './robot';
 import { buildToolpath, sliceForPrint, type Toolpath } from './toolpath';
 import { riskZones, type Zones } from './zones';
 import { printPartsInTurn, type PartBox } from './parts';
+import { tiltAlongWalls } from './tilt';
 import { evaluateOrientation, OVERHANG_LIMIT, supportOk } from './orientation';
 import { collisionReport, type Body, type CollisionReport } from './collision';
 
@@ -72,6 +73,8 @@ export function runBuild(
   const toolpath = partBoxes && partBoxes.length > 1 ? printPartsInTurn(mesh, print, partBoxes, offset, start) : buildToolpath(mesh, print, summary, start);
   const zones = riskZones(mesh, summary?.layers ?? null, print);
   const placed: RobotSettings = { ...robot, originX: offset[0], originY: offset[1], originZ: offset[2] };
+  // Tool leaning along the walls (every mode but the surface one, which has its own tilt).
+  if (print.toolTilt && toolpath.mode !== 'surface') tiltAlongWalls(toolpath, mesh, print);
   const src = writeKukaSrc(toolpath, placed, { sourceName, layerHeight: print.layerHeight });
 
   const min: [number, number, number] = [Infinity, Infinity, Infinity];

@@ -98,6 +98,41 @@ test('several parts are printed together; a part can be removed', async ({ page 
   await expect(stat(page, 'Punti LIN')).toHaveText(one);
 });
 
+/** ASCII STL of an hourglass (wide – narrow – wide): not printable whole without supports. */
+function hourglassStl(): Buffer {
+  const prof = [[40, 0], [10, 30], [40, 60]];
+  const seg = 48;
+  const P = (i: number, j: number) => {
+    const a = (j / seg) * Math.PI * 2;
+    return [prof[i][0] * Math.cos(a), prof[i][0] * Math.sin(a), prof[i][1]];
+  };
+  const tris: number[][][] = [];
+  for (let i = 0; i + 1 < prof.length; i++)
+    for (let j = 0; j < seg; j++) {
+      const k = (j + 1) % seg;
+      tris.push([P(i, j), P(i, k), P(i + 1, k)], [P(i, j), P(i + 1, k), P(i + 1, j)]);
+    }
+  for (let j = 0; j < seg; j++) {
+    const k = (j + 1) % seg;
+    tris.push([[0, 0, 0], P(0, k), P(0, j)], [[0, 0, 60], P(2, j), P(2, k)]);
+  }
+  let s = 'solid h\n';
+  for (const t of tris) s += 'facet normal 0 0 0\nouter loop\n' + t.map((v) => `vertex ${v.join(' ')}`).join('\n') + '\nendloop\nendfacet\n';
+  return Buffer.from(s + 'endsolid h\n');
+}
+
+test('a part that cannot be printed whole: the site suggests the cut and applies it', async ({ page }) => {
+  await page.setInputFiles('#file', { name: 'clessidra.stl', mimeType: 'model/stl', buffer: hourglassStl() });
+  await expect(page.locator('#splitBox')).toBeVisible();
+  await expect(page.locator('#splitText')).toContainText('I due pezzi si stampano senza supporti');
+  await page.locator('#splitApply').click();
+  await expect(page.locator('#partList li .title')).toHaveText(['1. clessidra.stl (1/2)', '2. clessidra.stl (2/2)']);
+  await expect(page.locator('#splitBox')).toBeHidden();
+  await expect(download(page)).toBeEnabled();
+  await expect(page.locator('#warnings')).not.toContainText('senza supporti può crollare');
+  await expect(page.locator('#modelInfo')).toContainText('watertight');
+});
+
 test('a part drawn in metres is flagged and scaled ×1000', async ({ page }) => {
   await addPart(page, 'metri.stl', 0.08, 0.06, 0.02);
   await expect(page.locator('#modelNotes')).toContainText('probabilmente il file è in metri');

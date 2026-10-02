@@ -28,6 +28,7 @@ export class Viewer {
   private startMarker: THREE.Mesh;
   private zones = new THREE.Group();
   private hits: THREE.Points | null = null;
+  private cutPlane: THREE.Mesh | null = null;
   private pickMode: 'none' | 'place' | 'start' = 'none';
   private bedZ = 0;
   /** Called with BASE coordinates when the user clicks the bed in a pick mode. */
@@ -160,6 +161,22 @@ export class Viewer {
   snapshot(): string {
     this.renderer.render(this.scene, this.camera);
     return this.renderer.domElement.toDataURL('image/png');
+  }
+
+  /** Suggested cut: a translucent square of side `size` through `at` (BASE), normal `n`. */
+  setCutPlane(at: [number, number, number] | null, n?: [number, number, number], size = 200) {
+    if (this.cutPlane) {
+      this.scene.remove(this.cutPlane);
+      this.cutPlane.geometry.dispose();
+      this.cutPlane = null;
+    }
+    if (!at || !n) return;
+    const mat = new THREE.MeshBasicMaterial({ color: 0xffb020, transparent: true, opacity: 0.35, side: THREE.DoubleSide, depthWrite: false });
+    this.cutPlane = new THREE.Mesh(new THREE.PlaneGeometry(size, size), mat);
+    this.cutPlane.position.set(...at);
+    this.cutPlane.quaternion.setFromUnitVectors(new THREE.Vector3(0, 0, 1), new THREE.Vector3(...n).normalize());
+    this.cutPlane.add(new THREE.LineSegments(new THREE.EdgesGeometry(this.cutPlane.geometry), new THREE.LineBasicMaterial({ color: 0xffb020 })));
+    this.scene.add(this.cutPlane);
   }
 
   setZonesVisible(v: boolean) {

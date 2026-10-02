@@ -13,6 +13,7 @@ interface Rule {
 /** Admitted ranges (mm, deg, s, m/s). */
 export const PRINT_RULES: Partial<Record<keyof PrintSettings, Rule>> = {
   layerHeight: { min: 0.1, max: 20 },
+  maxTilt: { min: 0, max: 60 },
   layerRamp: { min: 0, max: 500 },
   baseCut: { min: 0, max: 2000 },
   firstLayerZ: { min: 0, max: 20 },
